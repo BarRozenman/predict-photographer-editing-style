@@ -176,7 +176,7 @@ if __name__ == '__main__':
         initial_image = torch.load(im_name)
 
     # plt.show()
-    opt = optim.Adam([initial_image], lr=1000)
+    opt = optim.Adam([initial_image], lr=1e1)
     # opt =optim.LBFGS([noise_image],lr=0.05)
 
     initial_image = initial_image.cuda()
@@ -199,6 +199,7 @@ if __name__ == '__main__':
     # add loss for extreme color changes in pixels in the image with pytorch
     for i in tqdm(range(2000)):
         loss = 0
+        target_style, _ = model(initial_image)
 
         curr_style, curr_content = model(initial_image)
         # y, target_content = model(content_image)
