@@ -18,15 +18,19 @@ from torchvision.transforms import transforms
 import torch.nn.functional as F
 from tqdm import tqdm
 
+
 # Define the Convolutional Autoencoder
 class ConvAutoencoder(nn.Module):
     def __init__(self):
         super(ConvAutoencoder, self).__init__()
 
         # Encoder
-        self.conv1 = nn.Conv2d(3, 16, 3, padding=1)
-        self.conv2 = nn.Conv2d(16, 4, 3, padding=1)
         self.pool = nn.MaxPool2d(2, 2)
+
+        self.conv1 = nn.Conv2d(3, 16, 3, padding=1)
+        # pooling layer
+        self.conv2 = nn.Conv2d(16, 4, 3, padding=1)
+        # pooling layer
 
         # Decoder
         self.t_conv1 = nn.ConvTranspose2d(4, 16, 2, stride=2)
@@ -38,7 +42,9 @@ class ConvAutoencoder(nn.Module):
         x = F.relu(self.conv2(x))
         x = self.pool(x)
         x = F.relu(self.t_conv1(x))
-        x = F.sigmoid(self.t_conv2(x))
+        x = F.sigmoid(self.t_conv2(
+            x))  # since after relu everything is positive, we need to use sigmoid to get the values between 0 and 1,
+        # can be change to tanh if we want to get values between -1 and 1 (by removing the sigmoid)
 
         return x
 
@@ -82,8 +88,8 @@ def get_contrast(img=None, img_path=None):
     average_contrast = 100 * np.mean(contrast)
 
     print(str(average_contrast) + "%")
-    if average_contrast==torch.nan:
-        a=1
+    if average_contrast == torch.nan:
+        a = 1
     return [average_contrast]
 
 
@@ -113,7 +119,6 @@ def get_global_features(img=None, img_path=None):
 # create custom pytorch dataset
 
 def rgb_to_lab(srgb):
-
     srgb_pixels = torch.reshape(srgb, [-1, 3])
 
     linear_mask = (srgb_pixels <= 0.04045).type(torch.FloatTensor).to(device)
@@ -131,7 +136,8 @@ def rgb_to_lab(srgb):
 
     # XYZ to Lab
     xyz_normalized_pixels = torch.mul(xyz_pixels,
-                                      torch.tensor([1 / 0.950456, 1.0, 1 / 1.088754]).type(torch.FloatTensor).to(device))
+                                      torch.tensor([1 / 0.950456, 1.0, 1 / 1.088754]).type(torch.FloatTensor).to(
+                                          device))
 
     epsilon = 6.0 / 29.0
 
@@ -148,7 +154,8 @@ def rgb_to_lab(srgb):
         [116.0, -500.0, 200.0],  # fy
         [0.0, 0.0, -200.0],  # fz
     ]).type(torch.FloatTensor).to(device)
-    lab_pixels = torch.mm(fxfyfz_pixels, fxfyfz_to_lab) + torch.tensor([-16.0, 0.0, 0.0]).type(torch.FloatTensor).to(device)
+    lab_pixels = torch.mm(fxfyfz_pixels, fxfyfz_to_lab) + torch.tensor([-16.0, 0.0, 0.0]).type(torch.FloatTensor).to(
+        device)
     # return tf.reshape(lab_pixels, tf.shape(srgb))
     return torch.reshape(lab_pixels, srgb.shape)
 
@@ -166,7 +173,7 @@ class CustomDataset(ImageFolder):
         # feat = get_contrast(image)
         # rgb_feat = get_mean_var_rgb(image)
         # feat.extend(rgb_feat)
-        return image, img_path#, feat
+        return image, img_path  # , feat
 
 
 def lab_to_rgb(lab):
@@ -178,7 +185,8 @@ def lab_to_rgb(lab):
         [1 / 500.0, 0.0, 0.0],  # a
         [0.0, 0.0, -1 / 200.0],  # b
     ]).type(torch.FloatTensor).to(device)
-    fxfyfz_pixels = torch.mm(lab_pixels + torch.tensor([16.0, 0.0, 0.0]).type(torch.FloatTensor).to(device), lab_to_fxfyfz)
+    fxfyfz_pixels = torch.mm(lab_pixels + torch.tensor([16.0, 0.0, 0.0]).type(torch.FloatTensor).to(device),
+                             lab_to_fxfyfz)
 
     # convert to xyz
     epsilon = 6.0 / 29.0
@@ -210,6 +218,8 @@ def lab_to_rgb(lab):
             ((rgb_pixels + 0.000001) ** (1 / 2.4) * 1.055) - 0.055) * exponential_mask
 
     return torch.reshape(srgb_pixels, lab.shape)
+
+
 def batch_get_contrast(images):
     lab_imgs = (rgb_to_lab(images)[:, 0, :, :])
     max_img = F.max_pool2d(lab_imgs, 3, stride=1, padding=1)
@@ -219,9 +229,13 @@ def batch_get_contrast(images):
     # get average across whole image
     average_contrast = torch.mean(contrast, dim=(1, 2))
     return average_contrast
+
+
 def batch_get_mean_rgb(images):
     mean_rgb = torch.mean(images, dim=(2, 3))
     return mean_rgb
+
+
 if __name__ == '__main__':
 
     # Instantiate the model
@@ -229,10 +243,10 @@ if __name__ == '__main__':
     # Optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     # Epochs
-    n_epochs = 100
+    n_epochs = 1
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device = 'cpu'
-    # criterion = nn.BCELoss()
+    criterion = nn.L1Loss()
     dataset = CustomDataset('/home/bar/projects/personal/imagen/data/images', transform)
     train_sample_num = int(len(dataset) * 0.7)
     test_sample_num = len(dataset) - int(len(dataset) * 0.7)
@@ -240,6 +254,8 @@ if __name__ == '__main__':
     train_loader = torch.utils.data.DataLoader(train_set, batch_size=12, num_workers=0)
     test_loader = torch.utils.data.DataLoader(val_set, batch_size=12, num_workers=0)
     loss_func = nn.MSELoss()
+    # save image features to dataframe
+    df = pd.DataFrame(columns=['path', 'contrast', 'mean_r', 'mean_g', 'mean_b'])
     for epoch in range(1, n_epochs + 1):
         # monitor training loss
         train_loss = 0.0
@@ -251,25 +267,24 @@ if __name__ == '__main__':
             images = images.to(device)
             optimizer.zero_grad()
             outputs = model(images)
-            if False:
-                pred_feat = []
-                for i in outputs:
-                    curr_pred_feat = torch.mean(outputs, dim=(2, 3))
-                    # curr_pred_feat = get_global_features(i)
-                    pred_feat.append(torch.Tensor(curr_pred_feat))
-                pred_feat = torch.stack(pred_feat)
-            input_contrast =batch_get_contrast(images)
+            input_contrast = batch_get_contrast(images)
             output_contrast = batch_get_contrast(outputs)
             input_mean_rgb = batch_get_mean_rgb(images)
             output_mean_rgb = batch_get_mean_rgb(outputs)
-            # loss = loss_func(features.type(torch.float), pred_feat.type(torch.float))
-            contrast_loss = loss_func(input_contrast.type(torch.float), output_contrast.type(torch.float))/1000
-            mean_rgb_loss = loss_func(input_mean_rgb,output_mean_rgb)*10
-            loss = contrast_loss + mean_rgb_loss
-
-            loss.backward()
-            optimizer.step()
-            train_loss += loss.item() * images.size(0)
+            # contrast_loss = loss_func(input_contrast.type(torch.float), output_contrast.type(torch.float)) / 1000
+            # mean_rgb_loss = loss_func(input_mean_rgb, output_mean_rgb) * 100
+            # reconstruction_loss = criterion(outputs, images)
+            # loss = contrast_loss + mean_rgb_loss + reconstruction_loss
+            # loss.backward()
+            # optimizer.step()
+            # train_loss += loss.item() * images.size(0)
+            # add features to dataframe
+            for i in range(len(img_path_image)):
+                df = df.append({'path': img_path_image[i], 'contrast': output_contrast[i].item(),
+                                'mean_r': output_mean_rgb[i][0].item(), 'mean_g': output_mean_rgb[i][1].item(),
+                                'mean_b': output_mean_rgb[i][2].item()}, ignore_index=True)
+            a=1
+            # df.iloc[len(df):len(df)+len(img_path_image),:] = [img_path_image, input_contrast, input_mean_rgb[:, 0], input_mean_rgb[:, 1], input_mean_rgb[:, 2]]
 
         train_loss = train_loss / len(train_loader)
         print('Epoch: {} \tTraining Loss: {:.6f}'.format(epoch, train_loss))
