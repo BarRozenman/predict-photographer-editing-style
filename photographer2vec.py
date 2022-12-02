@@ -2,22 +2,23 @@ import collections
 import os
 from collections import namedtuple
 from glob import glob
-
+import matplotlib.pyplot as plt
 import pandas as pd
 import torch.nn as nn
 import cv2
 import numpy as np
 from PIL import Image
 import torch
+from personal_utils.flags import flags
 from torchvision.datasets import ImageFolder, DatasetFolder, VisionDataset
 from torchvision.models import vgg
 from torchvision.transforms import transforms as T
 from torchvision.transforms import transforms
-
+import seaborn as sns
 # Loss function
 import torch.nn.functional as F
 from tqdm import tqdm
-
+from torch.utils.tensorboard import SummaryWriter
 
 # Define the Convolutional Autoencoder
 class ConvAutoencoder(nn.Module):
@@ -37,12 +38,15 @@ class ConvAutoencoder(nn.Module):
         self.t_conv2 = nn.ConvTranspose2d(16, 3, 2, stride=2)
 
     def forward(self, x):
+        y=x[0:1, ...]
+        # print((self.conv1.weight.flatten().detach().numpy()))
+        F.relu(self.conv1(y))
         x = F.relu(self.conv1(x))
         x = self.pool(x)
         x = F.relu(self.conv2(x))
         x = self.pool(x)
         x = F.relu(self.t_conv1(x))
-        x = F.sigmoid(self.t_conv2(
+        x = torch.sigmoid(self.t_conv2(
             x))  # since after relu everything is positive, we need to use sigmoid to get the values between 0 and 1,
         # can be change to tanh if we want to get values between -1 and 1 (by removing the sigmoid)
 
@@ -158,7 +162,14 @@ def rgb_to_lab(srgb):
         device)
     # return tf.reshape(lab_pixels, tf.shape(srgb))
     return torch.reshape(lab_pixels, srgb.shape)
+def create_image_features_df():
+    df = pd.DataFrame(columns=['path', 'contrast', 'mean_r', 'mean_g', 'mean_b'])
+    for i in range(len(img_path_image)):
+        df = df.append({'path': img_path_image[i], 'contrast': output_contrast[i].item(),
+                        'mean_r': output_mean_rgb[i][0].item(), 'mean_g': output_mean_rgb[i][1].item(),
+                        'mean_b': output_mean_rgb[i][2].item()}, ignore_index=True)
 
+    df.to_csv('images_editing_features.csv')
 
 class CustomDataset(ImageFolder):
     def __getitem__(self, idx):
@@ -225,6 +236,7 @@ def batch_get_contrast(images):
     max_img = F.max_pool2d(lab_imgs, 3, stride=1, padding=1)
     min_img = -F.max_pool2d(-lab_imgs, 3, stride=1, padding=1)
     contrast = (max_img - min_img) / (max_img + min_img)
+    # print('minmax',max_img + min_img)
 
     # get average across whole image
     average_contrast = torch.mean(contrast, dim=(1, 2))
@@ -237,11 +249,11 @@ def batch_get_mean_rgb(images):
 
 
 if __name__ == '__main__':
-
+    flags.debug = False
     # Instantiate the model
     model = ConvAutoencoder().requires_grad_(True)
     # Optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.0000000001)
     # Epochs
     n_epochs = 1
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -255,39 +267,49 @@ if __name__ == '__main__':
     test_loader = torch.utils.data.DataLoader(val_set, batch_size=12, num_workers=0)
     loss_func = nn.MSELoss()
     # save image features to dataframe
-    df = pd.DataFrame(columns=['path', 'contrast', 'mean_r', 'mean_g', 'mean_b'])
     for epoch in range(1, n_epochs + 1):
         # monitor training loss
         train_loss = 0.0
         # Training
-        for data in tqdm(train_loader):
-            images, img_path_image = data
-            # features = torch.stack(features, 1)
-            # features = features[:, 1::2]
+        for batch_idx,batch in tqdm(enumerate(train_loader,1)):
+
+            images, img_path_image = batch
             images = images.to(device)
-            optimizer.zero_grad()
+            if flags.debug:
+                T.ToPILImage()(images[0,...]).show()
+                a=1
+            if batch_idx == 8:
+                a=1
             outputs = model(images)
             input_contrast = batch_get_contrast(images)
             output_contrast = batch_get_contrast(outputs)
             input_mean_rgb = batch_get_mean_rgb(images)
             output_mean_rgb = batch_get_mean_rgb(outputs)
-            # contrast_loss = loss_func(input_contrast.type(torch.float), output_contrast.type(torch.float)) / 1000
-            # mean_rgb_loss = loss_func(input_mean_rgb, output_mean_rgb) * 100
-            # reconstruction_loss = criterion(outputs, images)
-            # loss = contrast_loss + mean_rgb_loss + reconstruction_loss
-            # loss.backward()
-            # optimizer.step()
-            # train_loss += loss.item() * images.size(0)
-            # add features to dataframe
-            for i in range(len(img_path_image)):
-                df = df.append({'path': img_path_image[i], 'contrast': output_contrast[i].item(),
-                                'mean_r': output_mean_rgb[i][0].item(), 'mean_g': output_mean_rgb[i][1].item(),
-                                'mean_b': output_mean_rgb[i][2].item()}, ignore_index=True)
-            a=1
-            # df.iloc[len(df):len(df)+len(img_path_image),:] = [img_path_image, input_contrast, input_mean_rgb[:, 0], input_mean_rgb[:, 1], input_mean_rgb[:, 2]]
+            input_contrast[torch.isinf(input_contrast)] = input_contrast[~torch.isinf(input_contrast)].mean()
+            contrast_loss = loss_func(input_contrast.type(torch.float), output_contrast.type(torch.float)) / 1000000
+            mean_rgb_loss = loss_func(input_mean_rgb, output_mean_rgb) * 1
 
+            reconstruction_loss = criterion(outputs, images)/1000
+            print(reconstruction_loss)
+            loss = contrast_loss + mean_rgb_loss + reconstruction_loss
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            # sns.histplot(outputs[0].detach().cpu().numpy().flatten())
+            # plt.show()
+            if torch.isnan(model.conv1.weight).any().item():
+                a=1
+            train_loss += loss.item() * images.size(0)
+            if batch_idx % 1 == 0:
+                print('Epoch: {} \tBatch: {} \tLoss: {:.6f}'.format(
+                    epoch,
+                    batch_idx,
+                    loss.item()
+                ))
+            # df.iloc[len(df):len(df)+len(img_path_image),:] = [img_path_image, input_contrast, input_mean_rgb[:, 0], input_mean_rgb[:, 1], input_mean_rgb[:, 2]]
         train_loss = train_loss / len(train_loader)
         print('Epoch: {} \tTraining Loss: {:.6f}'.format(epoch, train_loss))
+
 
     arg_class = collections.namedtuple('arg',
                                        ['data_dir'])
