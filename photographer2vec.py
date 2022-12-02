@@ -2,6 +2,8 @@ import collections
 import os
 from collections import namedtuple
 from glob import glob
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import pandas as pd
 import torch.nn as nn
@@ -9,6 +11,7 @@ import cv2
 import numpy as np
 from PIL import Image
 import torch
+from natsort import natsorted
 from personal_utils.flags import flags
 from torchvision.datasets import ImageFolder, DatasetFolder, VisionDataset
 from torchvision.models import vgg
@@ -20,6 +23,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 
+
 # Define the Convolutional Autoencoder
 class ConvAutoencoder(nn.Module):
     def __init__(self):
@@ -28,25 +32,28 @@ class ConvAutoencoder(nn.Module):
         # Encoder
         self.pool = nn.MaxPool2d(2, 2)
 
-        self.conv1 = nn.Conv2d(3, 16, 3, padding=1)
+        self.conv1 = nn.Conv2d(3, 24, 3, padding=1)
         # pooling layer
-        self.conv2 = nn.Conv2d(16, 4, 3, padding=1)
+        self.conv2 = nn.Conv2d(24, 16, 3, padding=1)
+        self.conv3 = nn.Conv2d(16, 8, 3, padding=1)
         # pooling layer
 
         # Decoder
-        self.t_conv1 = nn.ConvTranspose2d(4, 16, 2, stride=2)
-        self.t_conv2 = nn.ConvTranspose2d(16, 3, 2, stride=2)
+        self.t_conv1 = nn.ConvTranspose2d(8, 16, 2, stride=2)
+        self.t_conv2 = nn.ConvTranspose2d(16, 6, 2, stride=2)
+        self.t_conv3 = nn.ConvTranspose2d(6, 3, 2, stride=2)
 
     def forward(self, x):
-        y=x[0:1, ...]
-        # print((self.conv1.weight.flatten().detach().numpy()))
-        F.relu(self.conv1(y))
         x = F.relu(self.conv1(x))
         x = self.pool(x)
         x = F.relu(self.conv2(x))
         x = self.pool(x)
+        x = F.relu(self.conv3(x))
+        x = self.pool(x)
         x = F.relu(self.t_conv1(x))
-        x = torch.sigmoid(self.t_conv2(
+        x = F.relu(self.t_conv2(x))
+
+        x = torch.sigmoid(self.t_conv3(
             x))  # since after relu everything is positive, we need to use sigmoid to get the values between 0 and 1,
         # can be change to tanh if we want to get values between -1 and 1 (by removing the sigmoid)
 
@@ -162,6 +169,8 @@ def rgb_to_lab(srgb):
         device)
     # return tf.reshape(lab_pixels, tf.shape(srgb))
     return torch.reshape(lab_pixels, srgb.shape)
+
+
 def create_image_features_df():
     df = pd.DataFrame(columns=['path', 'contrast', 'mean_r', 'mean_g', 'mean_b'])
     for i in range(len(img_path_image)):
@@ -170,6 +179,7 @@ def create_image_features_df():
                         'mean_b': output_mean_rgb[i][2].item()}, ignore_index=True)
 
     df.to_csv('images_editing_features.csv')
+
 
 class CustomDataset(ImageFolder):
     def __getitem__(self, idx):
@@ -236,103 +246,179 @@ def batch_get_contrast(images):
     max_img = F.max_pool2d(lab_imgs, 3, stride=1, padding=1)
     min_img = -F.max_pool2d(-lab_imgs, 3, stride=1, padding=1)
     contrast = (max_img - min_img) / (max_img + min_img)
+    contrast[(contrast < -100) + (contrast > 100)] = torch.mean(contrast[(contrast > -100) * (contrast < 100)])
+    contrast[contrast > 100] = torch.mean(contrast[contrast < 10])
+    # q1 = df[col].quantile(0.25)
+    # q3 = df[col].quantile(0.75)
+    # iqr = q3 - q1
+    # lower_fence = q1 - iqr * 1.5
+    # upper_fence = q3 + iqr * 1.5
+
+    # Counter(contrast.cpu().numpy().flatten().round(2))
     # print('minmax',max_img + min_img)
+    from collections import Counter
 
     # get average across whole image
     average_contrast = torch.mean(contrast, dim=(1, 2))
     return average_contrast
 
 
+def outlier(col: str, df_: pd.DataFrame = None, remove: bool = False) -> list:
+    """This function calculates the upper and lower fence
+    of any column and can also remove from the dataset"""
+    q1 = df_[col].quantile(0.25)
+    q3 = df_[col].quantile(0.75)
+
+    iqr = q3 - q1
+    lower_fence = q1 - iqr * 1.5
+    upper_fence = q3 + iqr * 1.5
+
+    if remove:
+        temp = df_[(df_[col] > lower_fence) & (df_[col] < upper_fence)]
+        return temp
+
+    return [lower_fence, upper_fence]
+
+
 def batch_get_mean_rgb(images):
     mean_rgb = torch.mean(images, dim=(2, 3))
     return mean_rgb
 
-
+def  split_images_to_photographers():
+    df = pd.read_csv('images_editing_features.csv')
+    df['photographer'] = df['image'].apply(lambda x: x.split('/')[0])
+    df['image'] = df['image'].apply(lambda x: x.split('/')[1])
+    df.to_csv('images_editing_features.csv', index=False)
+    df = pd.read_csv('images_editing_features.csv')
 if __name__ == '__main__':
     flags.debug = False
     # Instantiate the model
-    model = ConvAutoencoder().requires_grad_(True)
     # Optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.0000000001)
     # Epochs
-    n_epochs = 1
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    writer = SummaryWriter(f'runs/{flags.timestamp}')
+    num_workers = 0
+    n_epochs = 2
     device = 'cpu'
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     criterion = nn.L1Loss()
     dataset = CustomDataset('/home/bar/projects/personal/imagen/data/images', transform)
     train_sample_num = int(len(dataset) * 0.7)
     test_sample_num = len(dataset) - int(len(dataset) * 0.7)
     train_set, val_set = torch.utils.data.random_split(dataset, [train_sample_num, test_sample_num])
-    train_loader = torch.utils.data.DataLoader(train_set, batch_size=12, num_workers=0)
-    test_loader = torch.utils.data.DataLoader(val_set, batch_size=12, num_workers=0)
+    train_loader = torch.utils.data.DataLoader(train_set, batch_size=12, num_workers=num_workers)
+    test_loader = torch.utils.data.DataLoader(val_set, batch_size=12, num_workers=num_workers)
     loss_func = nn.MSELoss()
+    global_step = 0
+    lambda1 = lambda epoch: 0.95 ** epoch
+    files = glob('model_weights/**/conv_autoencoder_*.pt')
+    epoch_num_from_file = 0
+    batch_num_from_file = 0
+    lr = 0.001
+    if len(files) > 0:
+        last_run = natsorted(files)[-1]
+        epoch_num_from_file = int(Path(files[-1]).name.split('_')[3])
+        previous_epoch_idx = epoch_num_from_file
+        # batch_num_from_file = int(last_run.split('_')[5].split('.')[0])
+        model = ConvAutoencoder().to(device)
+        loaded_data = torch.load(last_run)
+        model.load_state_dict(loaded_data['state_dict'])
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        optimizer.load_state_dict(loaded_data['optimizer'])
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda1)
+        scheduler.load_state_dict(loaded_data['scheduler'])
+    else:
+        previous_epoch_idx = 0
+        model = ConvAutoencoder()
+        model.to(device)
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda1)
+
     # save image features to dataframe
-    for epoch in range(1, n_epochs + 1):
+    for epoch in range(1 + previous_epoch_idx, n_epochs + 1 + previous_epoch_idx):
+        scheduler.step()
         # monitor training loss
         train_loss = 0.0
         # Training
-        for batch_idx,batch in tqdm(enumerate(train_loader,1)):
+        # df = pd.DataFrame(columns=['path', 'contrast', 'mean_r', 'mean_g', 'mean_b'])
+
+        for batch_idx, batch in tqdm(enumerate(train_loader, 1)):
+            # for i in range(len(img_path_image)):
+            #     df = df.append({'path': img_path_image[i], 'contrast': output_contrast[i].item(),
+            #                     'mean_r': output_mean_rgb[i][0].item(), 'mean_g': output_mean_rgb[i][1].item(),
+            #                     'mean_b': output_mean_rgb[i][2].item()}, ignore_index=True)
+            #
+            # df.to_csv('images_editing_features.csv')
 
             images, img_path_image = batch
             images = images.to(device)
             if flags.debug:
-                T.ToPILImage()(images[0,...]).show()
-                a=1
-            if batch_idx == 8:
-                a=1
+                T.ToPILImage()(images[0, ...]).show()
+            # ===================forward=====================
             outputs = model(images)
             input_contrast = batch_get_contrast(images)
             output_contrast = batch_get_contrast(outputs)
             input_mean_rgb = batch_get_mean_rgb(images)
             output_mean_rgb = batch_get_mean_rgb(outputs)
+            input_contrast_temp = input_contrast.clone().detach().cpu().numpy()
+            output_contrast_temp = output_contrast.clone().detach().cpu().numpy()
             input_contrast[torch.isinf(input_contrast)] = input_contrast[~torch.isinf(input_contrast)].mean()
-            contrast_loss = loss_func(input_contrast.type(torch.float), output_contrast.type(torch.float)) / 1000000
-            mean_rgb_loss = loss_func(input_mean_rgb, output_mean_rgb) * 1
 
-            reconstruction_loss = criterion(outputs, images)/1000
-            print(reconstruction_loss)
+            contrast_loss = loss_func(input_contrast.type(torch.float), output_contrast.type(torch.float)) / 10000
+            mean_rgb_loss = loss_func(input_mean_rgb, output_mean_rgb) * 10
+            reconstruction_loss = criterion(outputs, images)
             loss = contrast_loss + mean_rgb_loss + reconstruction_loss
+            # ===================backward====================
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            # sns.histplot(outputs[0].detach().cpu().numpy().flatten())
-            # plt.show()
-            if torch.isnan(model.conv1.weight).any().item():
-                a=1
+            # ===================log========================
+            global_step += 1
+            writer.add_scalar('contrast_loss', contrast_loss, global_step)
+            writer.add_scalar('mean_rgb_loss', mean_rgb_loss, global_step)
+            writer.add_scalar('reconstruction_loss', reconstruction_loss, global_step)
+            writer.add_scalar('loss', loss, global_step)
             train_loss += loss.item() * images.size(0)
-            if batch_idx % 1 == 0:
+            if batch_idx % 50 == 0:
                 print('Epoch: {} \tBatch: {} \tLoss: {:.6f}'.format(
                     epoch,
                     batch_idx,
                     loss.item()
                 ))
+                # save model weights
+                if batch_idx % 100 == 0:
+                    print('Saving model weights')
+                    Path(f'./model_weights/{flags.timestamp}').mkdir(parents=True, exist_ok=True)
+                    torch.save({'state_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),'scheduler':scheduler.state_dict()},
+                               f'./model_weights/{flags.timestamp}/conv_autoencoder_epoch_{epoch}_step_{global_step}_{flags.timestamp}.pt')
+
             # df.iloc[len(df):len(df)+len(img_path_image),:] = [img_path_image, input_contrast, input_mean_rgb[:, 0], input_mean_rgb[:, 1], input_mean_rgb[:, 2]]
         train_loss = train_loss / len(train_loader)
         print('Epoch: {} \tTraining Loss: {:.6f}'.format(epoch, train_loss))
+    writer.close()
 
-
-    arg_class = collections.namedtuple('arg',
-                                       ['data_dir'])
-    data_dir = '/home/bar/projects/personal/imagen/data/images'
-    args = arg_class(data_dir)
-    args.data_dir
-    df = pd.DataFrame(columns=['image_path', 'contrast', 'mean_r', 'var_r', 'mean_g', 'var_g', 'mean_b', 'var_b'])
-    for image in glob(os.path.join(args.data_dir, "*.jpg"))[:100]:
-        try:
-            feat = get_contrast(image)
-        except:  # skip back images
-            continue
-        rgb_feat = get_mean_var_rgb(image)
-        feat.extend(rgb_feat)
-        feat.insert(0, image)
-        df.loc[len(df)] = feat
-    df.dropna(inplace=True)
-
-    img_path = '/home/bar/projects/personal/imagen/data/wedding_content.jpg'
-    contrast = get_contrast(img_path)
-    pil_img = Image.open(img_path)
-    get_mean_var_rgb(img_path)
-    exifdata = pil_img.getexif()
+    # arg_class = collections.namedtuple('arg',
+    #                                    ['data_dir'])
+    # data_dir = '/home/bar/projects/personal/imagen/data/images'
+    # args = arg_class(data_dir)
+    # args.data_dir
+    # df = pd.DataFrame(columns=['image_path', 'contrast', 'mean_r', 'var_r', 'mean_g', 'var_g', 'mean_b', 'var_b'])
+    # for image in glob(os.path.join(args.data_dir, "*.jpg"))[:100]:
+    #     try:
+    #         feat = get_contrast(image)
+    #     except:  # skip back images
+    #         continue
+    #     rgb_feat = get_mean_var_rgb(image)
+    #     feat.extend(rgb_feat)
+    #     feat.insert(0, image)
+    #     df.loc[len(df)] = feat
+    # df.dropna(inplace=True)
+    #
+    # img_path = '/home/bar/projects/personal/imagen/data/wedding_content.jpg'
+    # contrast = get_contrast(img_path)
+    # pil_img = Image.open(img_path)
+    # get_mean_var_rgb(img_path)
+    # exifdata = pil_img.getexif()
     # photographer
 
     # that the loss is the 5 values autoencoder of the input vs output
@@ -340,75 +426,74 @@ if __name__ == '__main__':
     EMBED_DIMENSION = 5
     EMBED_MAX_NORM = 1
 
-
-    class CBOW_Model(nn.Module):
-        def __init__(self, vocab_size: int):
-            super(CBOW_Model, self).__init__()
-            self.embeddings = nn.Embedding(
-                num_embeddings=vocab_size,
-                embedding_dim=EMBED_DIMENSION,
-                max_norm=EMBED_MAX_NORM,
-            )
-            self.linear = nn.Linear(
-                in_features=EMBED_DIMENSION,
-                out_features=vocab_size,
-            )
-
-        def forward(self, inputs_):
-            x = self.embeddings(inputs_)
-            x = x.mean(axis=1)
-            x = self.linear(x)
-            return x
-
-
-    # from torchtext.vocab import build_vocab_from_iterator
-
-    MIN_WORD_FREQUENCY = 50
-
-
-    def build_vocab(data_iter, tokenizer):
-        vocab = build_vocab_from_iterator(
-            map(tokenizer, data_iter),
-            specials=["<unk>"],
-            min_freq=MIN_WORD_FREQUENCY,
-        )
-        vocab.set_default_index(vocab["<unk>"])
-        return vocab
-
-
-    CBOW_N_WORDS = 4
-    MAX_SEQUENCE_LENGTH = 256
-
-
-    def collate_cbow(batch, text_pipeline):
-        batch_input, batch_output = [], []
-        for text in batch:
-            text_tokens_ids = text_pipeline(text)
-            if len(text_tokens_ids) < CBOW_N_WORDS * 2 + 1:
-                continue
-            if MAX_SEQUENCE_LENGTH:
-                text_tokens_ids = text_tokens_ids[:MAX_SEQUENCE_LENGTH]
-            for idx in range(len(text_tokens_ids) - CBOW_N_WORDS * 2):
-                token_id_sequence = text_tokens_ids[idx: (idx + CBOW_N_WORDS * 2 + 1)]
-                output = token_id_sequence.pop(CBOW_N_WORDS)
-                input_ = token_id_sequence
-                batch_input.append(input_)
-                batch_output.append(output)
-
-        batch_input = torch.tensor(batch_input, dtype=torch.long)
-        batch_output = torch.tensor(batch_output, dtype=torch.long)
-        return batch_input, batch_output
-
-
-    from torch.utils.data import DataLoader
-    from functools import partial
-
-    dataloader = DataLoader(
-        data_iter,
-        batch_size=batch_size,
-        shuffle=True,
-        collate_fn=partial(collate_cbow, text_pipeline=text_pipeline),
-    )
-
-    embeddings = list(model.parameters())[0]
-    vocab.get_itos()
+    # class CBOW_Model(nn.Module):
+    #     def __init__(self, vocab_size: int):
+    #         super(CBOW_Model, self).__init__()
+    #         self.embeddings = nn.Embedding(
+    #             num_embeddings=vocab_size,
+    #             embedding_dim=EMBED_DIMENSION,
+    #             max_norm=EMBED_MAX_NORM,
+    #         )
+    #         self.linear = nn.Linear(
+    #             in_features=EMBED_DIMENSION,
+    #             out_features=vocab_size,
+    #         )
+    #
+    #     def forward(self, inputs_):
+    #         x = self.embeddings(inputs_)
+    #         x = x.mean(axis=1)
+    #         x = self.linear(x)
+    #         return x
+    #
+    #
+    # # from torchtext.vocab import build_vocab_from_iterator
+    #
+    # MIN_WORD_FREQUENCY = 50
+    #
+    #
+    # def build_vocab(data_iter, tokenizer):
+    #     vocab = build_vocab_from_iterator(
+    #         map(tokenizer, data_iter),
+    #         specials=["<unk>"],
+    #         min_freq=MIN_WORD_FREQUENCY,
+    #     )
+    #     vocab.set_default_index(vocab["<unk>"])
+    #     return vocab
+    #
+    #
+    # CBOW_N_WORDS = 4
+    # MAX_SEQUENCE_LENGTH = 256
+    #
+    #
+    # def collate_cbow(batch, text_pipeline):
+    #     batch_input, batch_output = [], []
+    #     for text in batch:
+    #         text_tokens_ids = text_pipeline(text)
+    #         if len(text_tokens_ids) < CBOW_N_WORDS * 2 + 1:
+    #             continue
+    #         if MAX_SEQUENCE_LENGTH:
+    #             text_tokens_ids = text_tokens_ids[:MAX_SEQUENCE_LENGTH]
+    #         for idx in range(len(text_tokens_ids) - CBOW_N_WORDS * 2):
+    #             token_id_sequence = text_tokens_ids[idx: (idx + CBOW_N_WORDS * 2 + 1)]
+    #             output = token_id_sequence.pop(CBOW_N_WORDS)
+    #             input_ = token_id_sequence
+    #             batch_input.append(input_)
+    #             batch_output.append(output)
+    #
+    #     batch_input = torch.tensor(batch_input, dtype=torch.long)
+    #     batch_output = torch.tensor(batch_output, dtype=torch.long)
+    #     return batch_input, batch_output
+    #
+    #
+    # from torch.utils.data import DataLoader
+    # from functools import partial
+    #
+    # dataloader = DataLoader(
+    #     data_iter,
+    #     batch_size=batch_size,
+    #     shuffle=True,
+    #     collate_fn=partial(collate_cbow, text_pipeline=text_pipeline),
+    # )
+    #
+    # embeddings = list(model.parameters())[0]
+    # vocab.get_itos()
