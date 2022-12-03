@@ -358,15 +358,15 @@ def split_images_to_photographers():
 
 
 if __name__ == '__main__':
+
+
+
     flags.debug = False
-    # Instantiate the model
-    # Optimizer
-    # Epochs
     writer = SummaryWriter(f'runs/{flags.timestamp}')
     num_workers = 0
     n_epochs = 10
     batch_size = 32
-    flags.use_cache = False
+    flags.use_cache = True
     save_embedding = True
     device = 'cpu'
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -380,17 +380,19 @@ if __name__ == '__main__':
     test_loader = DataLoader(val_set, batch_size=batch_size, num_workers=num_workers)
     loss_func = nn.MSELoss()
     global_step = 0
-    lambda1 = lambda epoch: 0.95 ** epoch
+    lambda1 = lambda epoch: 0.65 ** epoch
     files = glob('model_weights/**/conv_autoencoder_*.pt')
+
     epoch_num_from_file = 0
     batch_num_from_file = 0
-    embedding_df = pd.DataFrame()
+    embedding_df = pd.DataFrame(columns=['image_path'] + [str(i) for i in range(16)])
+
     lr = 0.01
     if len(files) > 0 and flags.use_cache:
         last_run = natsorted(files)[-1]
         epoch_num_from_file = int(Path(files[-1]).name.split('_')[3])
+        previous_global_step = int(Path(files[-1]).name.split('_')[5])
         previous_epoch_idx = epoch_num_from_file
-        # batch_num_from_file = int(last_run.split('_')[5].split('.')[0])
         model = ConvAutoencoder().to(device)
         loaded_data = torch.load(last_run)
         model.load_state_dict(loaded_data['state_dict'])
@@ -400,6 +402,7 @@ if __name__ == '__main__':
         scheduler.load_state_dict(loaded_data['scheduler'])
     else:
         previous_epoch_idx = 0
+        previous_global_step = 0
         model = ConvAutoencoder()
         model.to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -410,10 +413,8 @@ if __name__ == '__main__':
         # monitor training loss
         train_loss = 0.0
         # Training
-
         for batch_idx, batch in tqdm(enumerate(train_loader, 1)):
             images, img_path_image = batch
-
             images = images.to(device)
             if flags.debug:
                 T.ToPILImage()(images[0, ...]).show()
@@ -436,27 +437,26 @@ if __name__ == '__main__':
             loss.backward()
             optimizer.step()
             # ===================log========================
-            global_step += 1
+            global_step = previous_global_step + batch_idx + (epoch - 1) * len(train_loader)
             writer.add_scalar('contrast_loss', contrast_loss, global_step)
             writer.add_scalar('mean_rgb_loss', mean_rgb_loss, global_step)
             writer.add_scalar('reconstruction_loss', reconstruction_loss, global_step)
             writer.add_scalar('loss', loss, global_step)
             train_loss += loss.item() * images.size(0)
-            if batch_idx % 10 == 0:
+            if save_embedding:
+                embedding_file_path = f'embeddings/embedding_epoch_{epoch}_{flags.timestamp}.csv'
+                embedding = emb.detach().cpu().numpy()
+                for i in range(len(img_path_image)):
+                    new_row = {'image_path': img_path_image[i]}
+                    new_row.update({str(feat_idx): embedding[i][feat_idx] for feat_idx in range(len(embedding[i]))})
+                    embedding_df.loc[len(embedding_df), :] = new_row
+                if Path(embedding_file_path).exists():
+                    embedding_df.to_csv(embedding_file_path, mode='a', index=False, header=False)
+                else:
+                    embedding_df.to_csv(embedding_file_path, index=False)
+                embedding_df = pd.DataFrame(columns=['image_path'] + [str(i) for i in range(16)])
+            if batch_idx % 50 == 0:
                 print('Epoch: {} \tBatch: {} \tLoss: {:.6f}'.format(epoch, batch_idx, loss.item()))
-                if save_embedding:
-                    print('Saving embeddings')
-                    embedding_file_path = f'embeddings/embedding_epoch_{epoch}_step_{global_step}_{flags.timestamp}.csv'
-                    for i in range(len(img_path_image)):
-                        new_row = emb.detach().cpu().numpy().tolist()
-                        new_row.insert(0, img_path_image[i])
-                        embedding_df.iloc[len(embedding_df)] = new_row
-                        if Path(embedding_file_path).exists():
-                            embedding_df.to_csv(embedding_file_path, mode='a', index=False, header=False)
-                        else:
-                            embedding_df.to_csv(embedding_file_path, index=False)
-
-                        embedding_df = pd.DataFrame()
                 # save model weights
                 if batch_idx % 100 != 0:
                     continue
@@ -465,44 +465,12 @@ if __name__ == '__main__':
                 torch.save({'state_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),
                             'scheduler': scheduler.state_dict()},
                            f'./model_weights/{flags.timestamp}/conv_autoencoder_epoch_{epoch}_step_{global_step}_{flags.timestamp}.pt')
-
         scheduler.step()  # step to the next learning rate each epoch
-
         train_loss = train_loss / len(train_loader)
         print('Epoch: {} \tTraining Loss: {:.6f}'.format(epoch, train_loss))
     writer.close()
 
 
-    class MixedNetwork(nn.Module):
-        def __init__(self):
-            super(MixedNetwork, self).__init__()
-
-            image_modules = list(models.resnet50().children())[:-1]
-            self.image_features = nn.Sequential(*image_modules)
-
-            self.landmark_features = nn.Sequential(
-                nn.Linear(in_features=96, out_features=192, bias=False),
-                nn.ReLU(inplace=True),
-                nn.Dropout(p=0.25),
-                nn.Linear(in_features=192, out_features=1000, bias=False),
-                nn.ReLU(inplace=True),
-                nn.Dropout(p=0.25))
-
-            self.combined_features = nn.Sequential(
-                # change this input nodes
-                nn.Linear(3048, 512),
-                nn.ReLU(),
-                nn.Linear(512, 32),
-                nn.ReLU(),
-                nn.Linear(32, 1))
-
-        def forward(self, image, landmarks):
-            a = self.image_features(image)
-            b = self.landmark_features(landmarks)
-            x = torch.cat((a.view(a.size(0), -1), b.view(b.size(0), -1)), dim=1)
-            x = self.combined_features(x)
-            x = torch.sigmoid(x)
-            return x
 
 
     # arg_class = collections.namedtuple('arg',
