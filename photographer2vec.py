@@ -10,6 +10,7 @@ import pandas as pd
 import torch.nn as nn
 import cv2
 import numpy as np
+import torchvision
 from PIL import Image
 import torch
 from natsort import natsorted
@@ -99,15 +100,16 @@ class ConvAutoencoder(nn.Module):
         # pooling layer
         self.conv2 = nn.Conv2d(24, 20, 3, padding=1)
         self.conv3 = nn.Conv2d(20, 4, 3, padding=1)
+        self.conv4 = nn.Conv2d(4, 8, 3, padding=1)
         # self.conv4 = nn.Conv2d(20, 4, 3, padding=1)
         # pooling layer
 
-        self.lin = nn.Linear(3136, 16)
+        self.lin = nn.Linear(1568, 16)
 
         # Decoder
         self.t_conv1 = nn.ConvTranspose2d(1, 12, 4, stride=4)
         self.t_conv2 = nn.ConvTranspose2d(12, 6, 4, stride=4)
-        self.t_conv3 = nn.ConvTranspose2d(6, 6, 4, stride=4)  # dsfdsfdfs
+        self.t_conv3 = nn.ConvTranspose2d(6, 6, 4, stride=2)  # dsfdsfdfs
         self.t_conv4 = nn.ConvTranspose2d(6, 3, 4, stride=2)
 
     def forward(self, x):
@@ -120,13 +122,15 @@ class ConvAutoencoder(nn.Module):
         # x = self.pool(x)
         # x = F.relu(self.conv4(x))
         x = self.pool(x)
+        x = self.conv4(x)
+        x = self.pool(x)
         x = nn.Flatten()(x)
         embedding = self.lin(x)
         x = embedding.view(embedding.shape[0], 1, 4, 4)
         # get x layer from convnet and return it
         # emb = F.avg_pool2d(x, kernel_size=56, stride=1, padding=0)
         x = F.relu(x)
-        x = self.pool(x)
+        # x = self.pool(x)
         x = F.relu(self.t_conv1(x))
         x = F.relu(self.t_conv2(x))
         x = F.relu(self.t_conv3(x))
@@ -135,6 +139,8 @@ class ConvAutoencoder(nn.Module):
             x))  # since after relu everything is positive, we need to use sigmoid to get the values between 0 and 1,
         # can be change to tanh if we want to get values between -1 and 1 (by removing the sigmoid)
         x = Resize(224)(x)
+        if flags.debug:
+            T.ToPILImage()(x[0, ...]).show()
 
         return x, embedding
 
@@ -253,11 +259,12 @@ def rgb_to_lab(srgb):
 def create_image_features_df():
     df = pd.DataFrame(columns=['path', 'contrast', 'mean_r', 'mean_g', 'mean_b'])
     for i in range(len(img_path_image)):
-        df = df.append({'path': img_path_image[i], 'contrast': output_contrast[i].item(),
-                        'mean_r': output_mean_rgb[i][0].item(), 'mean_g': output_mean_rgb[i][1].item(),
-                        'mean_b': output_mean_rgb[i][2].item()}, ignore_index=True)
+        df = df.append({'path': img_path_image[i], 'contrast': input_contrast[i].item(),
+                        'mean_r': input_mean_rgb[i][0].item(), 'mean_g': input_mean_rgb[i][1].item(),
+                        'mean_b': input_mean_rgb[i][2].item()}, ignore_index=True)
 
-    df.to_csv('images_editing_features.csv')
+    df.to_csv('images_editing_features.csv', index=False)
+    split_images_to_photographers()
 
 
 class CustomDataset(ImageFolder):
@@ -326,17 +333,6 @@ def batch_get_contrast(images):
     min_img = -F.max_pool2d(-lab_imgs, 3, stride=1, padding=1)
     contrast = (max_img - min_img) / (max_img + min_img)
     contrast[(contrast < -100) + (contrast > 100)] = torch.mean(contrast[(contrast > -100) * (contrast < 100)])
-    contrast[contrast > 100] = torch.mean(contrast[contrast < 10])
-    # q1 = df[col].quantile(0.25)
-    # q3 = df[col].quantile(0.75)
-    # iqr = q3 - q1
-    # lower_fence = q1 - iqr * 1.5
-    # upper_fence = q3 + iqr * 1.5
-
-    # Counter(contrast.cpu().numpy().flatten().round(2))
-    # print('minmax',max_img + min_img)
-    from collections import Counter
-
     # get average across whole image
     average_contrast = torch.mean(contrast, dim=(1, 2))
     return average_contrast
@@ -358,12 +354,9 @@ def split_images_to_photographers():
 
 
 if __name__ == '__main__':
-
-
-
     flags.debug = False
     writer = SummaryWriter(f'runs/{flags.timestamp}')
-    num_workers = 0
+    num_workers = 12
     n_epochs = 10
     batch_size = 32
     flags.use_cache = True
@@ -375,7 +368,7 @@ if __name__ == '__main__':
     dataset = CustomDataset('/home/bar/projects/personal/imagen/data/images', transform)
     train_sample_num = int(len(dataset) * 0.7)
     test_sample_num = len(dataset) - int(len(dataset) * 0.7)
-    train_set, val_set = random_split(dataset, [train_sample_num, test_sample_num])
+    train_set, val_set = random_split(dataset, [train_sample_num, test_sample_num], generator=torch.Generator().manual_seed(42))
     train_loader = DataLoader(train_set, batch_size=batch_size, num_workers=num_workers)
     test_loader = DataLoader(val_set, batch_size=batch_size, num_workers=num_workers)
     loss_func = nn.MSELoss()
@@ -413,19 +406,19 @@ if __name__ == '__main__':
         # monitor training loss
         train_loss = 0.0
         # Training
-        for batch_idx, batch in tqdm(enumerate(train_loader, 1)):
+        for batch_idx, batch in tqdm(enumerate(train_loader, 1), total=len(train_loader)):
             images, img_path_image = batch
             images = images.to(device)
             if flags.debug:
                 T.ToPILImage()(images[0, ...]).show()
             # ===================forward=====================
             outputs, emb = model(images)
+            if flags.debug:
+                T.ToPILImage()(outputs[0, ...]).show()
             input_contrast = batch_get_contrast(images)
             output_contrast = batch_get_contrast(outputs)
             input_mean_rgb = batch_get_mean_rgb(images)
             output_mean_rgb = batch_get_mean_rgb(outputs)
-            input_contrast_temp = input_contrast.clone().detach().cpu().numpy()
-            output_contrast_temp = output_contrast.clone().detach().cpu().numpy()
             input_contrast[torch.isinf(input_contrast)] = input_contrast[~torch.isinf(input_contrast)].mean()
 
             contrast_loss = loss_func(input_contrast.type(torch.float), output_contrast.type(torch.float)) / 10000
@@ -456,6 +449,13 @@ if __name__ == '__main__':
                     embedding_df.to_csv(embedding_file_path, index=False)
                 embedding_df = pd.DataFrame(columns=['image_path'] + [str(i) for i in range(16)])
             if batch_idx % 50 == 0:
+                # save to png image first input and out images of the batch
+                img_grid_input = torchvision.utils.make_grid(images[:4,...])
+                img_grid_output = torchvision.utils.make_grid(outputs[:4,...])
+                writer.add_image('images input', img_grid_input, global_step)
+                writer.add_image('images prediction', img_grid_output, global_step)
+
+
                 print('Epoch: {} \tBatch: {} \tLoss: {:.6f}'.format(epoch, batch_idx, loss.item()))
                 # save model weights
                 if batch_idx % 100 != 0:
@@ -469,9 +469,6 @@ if __name__ == '__main__':
         train_loss = train_loss / len(train_loader)
         print('Epoch: {} \tTraining Loss: {:.6f}'.format(epoch, train_loss))
     writer.close()
-
-
-
 
     # arg_class = collections.namedtuple('arg',
     #                                    ['data_dir'])
