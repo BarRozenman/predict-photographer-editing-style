@@ -4,6 +4,7 @@ from collections import namedtuple
 from glob import glob
 from pathlib import Path
 
+import hdbscan
 import matplotlib.pyplot as plt
 import pandas as pd
 import torch.nn as nn
@@ -13,9 +14,14 @@ from PIL import Image
 import torch
 from natsort import natsorted
 from personal_utils.flags import flags
+from personal_utils.plot_utils import scatter_clustering_with_gt_labels_in_2d, scatter_clustering_with_gt_labels_in_3d
+from sklearn.cluster import KMeans
+from torch import max_pool2d, conv_transpose2d
+from torch.utils.data import DataLoader
+from torch.utils.data.dataset import random_split
 from torchvision.datasets import ImageFolder, DatasetFolder, VisionDataset
 from torchvision.models import vgg
-from torchvision.transforms import transforms as T
+from torchvision.transforms import transforms as T, Resize
 from torchvision.transforms import transforms
 import seaborn as sns
 # Loss function
@@ -25,6 +31,63 @@ from torch.utils.tensorboard import SummaryWriter
 
 
 # Define the Convolutional Autoencoder
+class Reshape(nn.Module):
+    def __init__(self, *args):
+        super().__init__()
+        self.shape = args
+
+    def forward(self, x):
+        return x.view(self.shape)
+
+
+class Trim(nn.Module):
+    def __init__(self, *args):
+        super().__init__()
+
+    def forward(self, x):
+        return x[:, :, :28, :28]
+
+
+class AutoEncoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.encoder = nn.Sequential(  # 784
+            nn.Conv2d(3, 32, stride=2, kernel_size=5, padding=2),
+            nn.LeakyReLU(0.01),
+            nn.Conv2d(32, 64, stride=(2, 2), kernel_size=5, padding=2),
+            nn.LeakyReLU(0.01),
+            nn.Conv2d(64, 64, stride=(2, 2), kernel_size=5, padding=2),
+            nn.LeakyReLU(0.01),
+            nn.Conv2d(64, 64, stride=(2, 2), kernel_size=5, padding=2),
+            nn.Flatten(),
+            nn.Linear(12544, 10)
+        )
+        self.decoder = nn.Sequential(
+            torch.nn.Linear(10, 3136),
+            Reshape(-1, 64, 7, 7),
+            nn.ConvTranspose2d(64, 64, stride=(2, 2), kernel_size=(3, 3), padding=1),
+            nn.LeakyReLU(0.01),
+            nn.ConvTranspose2d(64, 64, stride=(2, 2), kernel_size=(3, 3), padding=1),
+            nn.LeakyReLU(0.01),
+            nn.ConvTranspose2d(64, 32, stride=(2, 2), kernel_size=(3, 3), padding=1),
+            nn.LeakyReLU(0.01),
+            nn.ConvTranspose2d(32, 3, stride=2, kernel_size=(3, 3), padding=1),
+            nn.ConvTranspose2d(3, 3, stride=2, kernel_size=(3, 3), padding=1),
+            nn.ConvTranspose2d(3, 3, stride=2, kernel_size=(3, 3), padding=1),
+            # Trim(),  # 1x29x29 -> 1x28x28
+            nn.ReLU(),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        embedding = self.encoder(x)
+
+        x = self.decoder(embedding)
+        x = Resize(224)(x)
+        return x
+
+
 class ConvAutoencoder(nn.Module):
     def __init__(self):
         super(ConvAutoencoder, self).__init__()
@@ -34,30 +97,46 @@ class ConvAutoencoder(nn.Module):
 
         self.conv1 = nn.Conv2d(3, 24, 3, padding=1)
         # pooling layer
-        self.conv2 = nn.Conv2d(24, 16, 3, padding=1)
-        self.conv3 = nn.Conv2d(16, 8, 3, padding=1)
+        self.conv2 = nn.Conv2d(24, 20, 3, padding=1)
+        self.conv3 = nn.Conv2d(20, 4, 3, padding=1)
+        # self.conv4 = nn.Conv2d(20, 4, 3, padding=1)
         # pooling layer
 
+        self.lin = nn.Linear(3136, 16)
+
         # Decoder
-        self.t_conv1 = nn.ConvTranspose2d(8, 16, 2, stride=2)
-        self.t_conv2 = nn.ConvTranspose2d(16, 6, 2, stride=2)
-        self.t_conv3 = nn.ConvTranspose2d(6, 3, 2, stride=2)
+        self.t_conv1 = nn.ConvTranspose2d(1, 12, 4, stride=4)
+        self.t_conv2 = nn.ConvTranspose2d(12, 6, 4, stride=4)
+        self.t_conv3 = nn.ConvTranspose2d(6, 6, 4, stride=4)  # dsfdsfdfs
+        self.t_conv4 = nn.ConvTranspose2d(6, 3, 4, stride=2)
 
     def forward(self, x):
         x = F.relu(self.conv1(x))
         x = self.pool(x)
         x = F.relu(self.conv2(x))
         x = self.pool(x)
-        x = F.relu(self.conv3(x))
+
+        x = self.conv3(x)
+        # x = self.pool(x)
+        # x = F.relu(self.conv4(x))
+        x = self.pool(x)
+        x = nn.Flatten()(x)
+        embedding = self.lin(x)
+        x = embedding.view(embedding.shape[0], 1, 4, 4)
+        # get x layer from convnet and return it
+        # emb = F.avg_pool2d(x, kernel_size=56, stride=1, padding=0)
+        x = F.relu(x)
         x = self.pool(x)
         x = F.relu(self.t_conv1(x))
         x = F.relu(self.t_conv2(x))
+        x = F.relu(self.t_conv3(x))
 
-        x = torch.sigmoid(self.t_conv3(
+        x = torch.sigmoid(self.t_conv4(
             x))  # since after relu everything is positive, we need to use sigmoid to get the values between 0 and 1,
         # can be change to tanh if we want to get values between -1 and 1 (by removing the sigmoid)
+        x = Resize(224)(x)
 
-        return x
+        return x, embedding
 
 
 def transform(img):
@@ -263,33 +342,21 @@ def batch_get_contrast(images):
     return average_contrast
 
 
-def outlier(col: str, df_: pd.DataFrame = None, remove: bool = False) -> list:
-    """This function calculates the upper and lower fence
-    of any column and can also remove from the dataset"""
-    q1 = df_[col].quantile(0.25)
-    q3 = df_[col].quantile(0.75)
-
-    iqr = q3 - q1
-    lower_fence = q1 - iqr * 1.5
-    upper_fence = q3 + iqr * 1.5
-
-    if remove:
-        temp = df_[(df_[col] > lower_fence) & (df_[col] < upper_fence)]
-        return temp
-
-    return [lower_fence, upper_fence]
-
-
 def batch_get_mean_rgb(images):
     mean_rgb = torch.mean(images, dim=(2, 3))
     return mean_rgb
 
-def  split_images_to_photographers():
+
+def split_images_to_photographers():
     df = pd.read_csv('images_editing_features.csv')
-    df['photographer'] = df['image'].apply(lambda x: x.split('/')[0])
-    df['image'] = df['image'].apply(lambda x: x.split('/')[1])
+    clusterer = KMeans(n_clusters=30, random_state=0).fit(df[['contrast', 'mean_r', 'mean_g', 'mean_b']])
+    scatter_clustering_with_gt_labels_in_2d(df[['contrast', 'mean_r', 'mean_g', 'mean_b']], clusterer.labels_)
+    scatter_clustering_with_gt_labels_in_3d(df[['contrast', 'mean_r', 'mean_g', 'mean_b']], clusterer.labels_)
+    plt.show()
+    df['photographer'] = clusterer.labels_
     df.to_csv('images_editing_features.csv', index=False)
-    df = pd.read_csv('images_editing_features.csv')
+
+
 if __name__ == '__main__':
     flags.debug = False
     # Instantiate the model
@@ -297,7 +364,10 @@ if __name__ == '__main__':
     # Epochs
     writer = SummaryWriter(f'runs/{flags.timestamp}')
     num_workers = 0
-    n_epochs = 2
+    n_epochs = 10
+    batch_size = 32
+    flags.use_cache = False
+    save_embedding = True
     device = 'cpu'
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -305,17 +375,18 @@ if __name__ == '__main__':
     dataset = CustomDataset('/home/bar/projects/personal/imagen/data/images', transform)
     train_sample_num = int(len(dataset) * 0.7)
     test_sample_num = len(dataset) - int(len(dataset) * 0.7)
-    train_set, val_set = torch.utils.data.random_split(dataset, [train_sample_num, test_sample_num])
-    train_loader = torch.utils.data.DataLoader(train_set, batch_size=12, num_workers=num_workers)
-    test_loader = torch.utils.data.DataLoader(val_set, batch_size=12, num_workers=num_workers)
+    train_set, val_set = random_split(dataset, [train_sample_num, test_sample_num])
+    train_loader = DataLoader(train_set, batch_size=batch_size, num_workers=num_workers)
+    test_loader = DataLoader(val_set, batch_size=batch_size, num_workers=num_workers)
     loss_func = nn.MSELoss()
     global_step = 0
     lambda1 = lambda epoch: 0.95 ** epoch
     files = glob('model_weights/**/conv_autoencoder_*.pt')
     epoch_num_from_file = 0
     batch_num_from_file = 0
-    lr = 0.001
-    if len(files) > 0:
+    embedding_df = pd.DataFrame()
+    lr = 0.01
+    if len(files) > 0 and flags.use_cache:
         last_run = natsorted(files)[-1]
         epoch_num_from_file = int(Path(files[-1]).name.split('_')[3])
         previous_epoch_idx = epoch_num_from_file
@@ -336,26 +407,18 @@ if __name__ == '__main__':
 
     # save image features to dataframe
     for epoch in range(1 + previous_epoch_idx, n_epochs + 1 + previous_epoch_idx):
-        scheduler.step()
         # monitor training loss
         train_loss = 0.0
         # Training
-        # df = pd.DataFrame(columns=['path', 'contrast', 'mean_r', 'mean_g', 'mean_b'])
 
         for batch_idx, batch in tqdm(enumerate(train_loader, 1)):
-            # for i in range(len(img_path_image)):
-            #     df = df.append({'path': img_path_image[i], 'contrast': output_contrast[i].item(),
-            #                     'mean_r': output_mean_rgb[i][0].item(), 'mean_g': output_mean_rgb[i][1].item(),
-            #                     'mean_b': output_mean_rgb[i][2].item()}, ignore_index=True)
-            #
-            # df.to_csv('images_editing_features.csv')
-
             images, img_path_image = batch
+
             images = images.to(device)
             if flags.debug:
                 T.ToPILImage()(images[0, ...]).show()
             # ===================forward=====================
-            outputs = model(images)
+            outputs, emb = model(images)
             input_contrast = batch_get_contrast(images)
             output_contrast = batch_get_contrast(outputs)
             input_mean_rgb = batch_get_mean_rgb(images)
@@ -379,23 +442,68 @@ if __name__ == '__main__':
             writer.add_scalar('reconstruction_loss', reconstruction_loss, global_step)
             writer.add_scalar('loss', loss, global_step)
             train_loss += loss.item() * images.size(0)
-            if batch_idx % 50 == 0:
-                print('Epoch: {} \tBatch: {} \tLoss: {:.6f}'.format(
-                    epoch,
-                    batch_idx,
-                    loss.item()
-                ))
-                # save model weights
-                if batch_idx % 100 == 0:
-                    print('Saving model weights')
-                    Path(f'./model_weights/{flags.timestamp}').mkdir(parents=True, exist_ok=True)
-                    torch.save({'state_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),'scheduler':scheduler.state_dict()},
-                               f'./model_weights/{flags.timestamp}/conv_autoencoder_epoch_{epoch}_step_{global_step}_{flags.timestamp}.pt')
+            if batch_idx % 10 == 0:
+                print('Epoch: {} \tBatch: {} \tLoss: {:.6f}'.format(epoch, batch_idx, loss.item()))
+                if save_embedding:
+                    print('Saving embeddings')
+                    embedding_file_path = f'embeddings/embedding_epoch_{epoch}_step_{global_step}_{flags.timestamp}.csv'
+                    for i in range(len(img_path_image)):
+                        new_row = emb.detach().cpu().numpy().tolist()
+                        new_row.insert(0, img_path_image[i])
+                        embedding_df.iloc[len(embedding_df)] = new_row
+                        if Path(embedding_file_path).exists():
+                            embedding_df.to_csv(embedding_file_path, mode='a', index=False, header=False)
+                        else:
+                            embedding_df.to_csv(embedding_file_path, index=False)
 
-            # df.iloc[len(df):len(df)+len(img_path_image),:] = [img_path_image, input_contrast, input_mean_rgb[:, 0], input_mean_rgb[:, 1], input_mean_rgb[:, 2]]
+                        embedding_df = pd.DataFrame()
+                # save model weights
+                if batch_idx % 100 != 0:
+                    continue
+                print('Saving model weights')
+                Path(f'./model_weights/{flags.timestamp}').mkdir(parents=True, exist_ok=True)
+                torch.save({'state_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),
+                            'scheduler': scheduler.state_dict()},
+                           f'./model_weights/{flags.timestamp}/conv_autoencoder_epoch_{epoch}_step_{global_step}_{flags.timestamp}.pt')
+
+        scheduler.step()  # step to the next learning rate each epoch
+
         train_loss = train_loss / len(train_loader)
         print('Epoch: {} \tTraining Loss: {:.6f}'.format(epoch, train_loss))
     writer.close()
+
+
+    class MixedNetwork(nn.Module):
+        def __init__(self):
+            super(MixedNetwork, self).__init__()
+
+            image_modules = list(models.resnet50().children())[:-1]
+            self.image_features = nn.Sequential(*image_modules)
+
+            self.landmark_features = nn.Sequential(
+                nn.Linear(in_features=96, out_features=192, bias=False),
+                nn.ReLU(inplace=True),
+                nn.Dropout(p=0.25),
+                nn.Linear(in_features=192, out_features=1000, bias=False),
+                nn.ReLU(inplace=True),
+                nn.Dropout(p=0.25))
+
+            self.combined_features = nn.Sequential(
+                # change this input nodes
+                nn.Linear(3048, 512),
+                nn.ReLU(),
+                nn.Linear(512, 32),
+                nn.ReLU(),
+                nn.Linear(32, 1))
+
+        def forward(self, image, landmarks):
+            a = self.image_features(image)
+            b = self.landmark_features(landmarks)
+            x = torch.cat((a.view(a.size(0), -1), b.view(b.size(0), -1)), dim=1)
+            x = self.combined_features(x)
+            x = torch.sigmoid(x)
+            return x
+
 
     # arg_class = collections.namedtuple('arg',
     #                                    ['data_dir'])
