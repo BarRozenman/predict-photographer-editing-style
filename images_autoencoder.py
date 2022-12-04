@@ -96,11 +96,11 @@ class ConvAutoencoder(nn.Module):
         # Encoder
         self.pool = nn.MaxPool2d(2, 2)
 
-        self.conv1 = nn.Conv2d(3, 24, 3, padding=1)
+        self.conv1 = nn.Conv2d(3, 16, 3, padding=1)
         # pooling layer
-        self.conv2 = nn.Conv2d(24, 20, 3, padding=1)
-        self.conv3 = nn.Conv2d(20, 4, 3, padding=1)
-        self.conv4 = nn.Conv2d(4, 8, 3, padding=1)
+        self.conv2 = nn.Conv2d(16, 8, 3, padding=1)
+        self.conv3 = nn.Conv2d(8, 6, 3, padding=1)
+        self.conv4 = nn.Conv2d(6, 8, 3, padding=1)
         # self.conv4 = nn.Conv2d(20, 4, 3, padding=1)
         # pooling layer
 
@@ -357,9 +357,9 @@ if __name__ == '__main__':
     flags.debug = False
     writer = SummaryWriter(f'runs/{flags.timestamp}')
     num_workers = 12
-    n_epochs = 10
-    batch_size = 32
-    flags.use_cache = True
+    n_epochs = 30
+    batch_size = 64
+    flags.use_cache = False
     save_embedding = True
     device = 'cpu'
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -368,12 +368,13 @@ if __name__ == '__main__':
     dataset = CustomDataset('/home/bar/projects/personal/imagen/data/images', transform)
     train_sample_num = int(len(dataset) * 0.7)
     test_sample_num = len(dataset) - int(len(dataset) * 0.7)
-    train_set, val_set = random_split(dataset, [train_sample_num, test_sample_num], generator=torch.Generator().manual_seed(42))
+    train_set, val_set = random_split(dataset, [train_sample_num, test_sample_num],
+                                      generator=torch.Generator().manual_seed(42))
     train_loader = DataLoader(train_set, batch_size=batch_size, num_workers=num_workers)
     test_loader = DataLoader(val_set, batch_size=batch_size, num_workers=num_workers)
     loss_func = nn.MSELoss()
     global_step = 0
-    lambda1 = lambda epoch: 0.65 ** epoch
+    lambda1 = lambda epoch: 0.999 ** np.ceil(epoch//4)
     files = glob('model_weights/**/conv_autoencoder_*.pt')
 
     epoch_num_from_file = 0
@@ -400,7 +401,6 @@ if __name__ == '__main__':
         model.to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda1)
-
     # save image features to dataframe
     for epoch in range(1 + previous_epoch_idx, n_epochs + 1 + previous_epoch_idx):
         # monitor training loss
@@ -421,7 +421,7 @@ if __name__ == '__main__':
             output_mean_rgb = batch_get_mean_rgb(outputs)
             input_contrast[torch.isinf(input_contrast)] = input_contrast[~torch.isinf(input_contrast)].mean()
 
-            contrast_loss = loss_func(input_contrast.type(torch.float), output_contrast.type(torch.float)) / 10000
+            contrast_loss = loss_func(input_contrast.type(torch.float), output_contrast.type(torch.float)) / 100000
             mean_rgb_loss = loss_func(input_mean_rgb, output_mean_rgb) * 10
             reconstruction_loss = criterion(outputs, images)
             loss = contrast_loss + mean_rgb_loss + reconstruction_loss
@@ -429,6 +429,8 @@ if __name__ == '__main__':
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            scheduler.step()  # step to the next learning rate each batch -> faster
+
             # ===================log========================
             global_step = previous_global_step + batch_idx + (epoch - 1) * len(train_loader)
             writer.add_scalar('contrast_loss', contrast_loss, global_step)
@@ -437,6 +439,10 @@ if __name__ == '__main__':
             writer.add_scalar('loss', loss, global_step)
             train_loss += loss.item() * images.size(0)
             if save_embedding:
+                # print learning rate
+                print(scheduler.get_last_lr())
+                writer.add_scalar('learning rate', scheduler.get_last_lr()[0], global_step)
+
                 embedding_file_path = f'embeddings/embedding_epoch_{epoch}_{flags.timestamp}.csv'
                 embedding = emb.detach().cpu().numpy()
                 for i in range(len(img_path_image)):
@@ -448,24 +454,24 @@ if __name__ == '__main__':
                 else:
                     embedding_df.to_csv(embedding_file_path, index=False)
                 embedding_df = pd.DataFrame(columns=['image_path'] + [str(i) for i in range(16)])
-            if batch_idx % 50 == 0:
+            if batch_idx % 20 == 0:
                 # save to png image first input and out images of the batch
-                img_grid_input = torchvision.utils.make_grid(images[:4,...])
-                img_grid_output = torchvision.utils.make_grid(outputs[:4,...])
+                example_image_idx = np.random.choice(np.arange(images.shape[0]), 4, replace=False)
+
+                img_grid_input = torchvision.utils.make_grid(images[example_image_idx, ...])
+                img_grid_output = torchvision.utils.make_grid(outputs[example_image_idx, ...])
                 writer.add_image('images input', img_grid_input, global_step)
                 writer.add_image('images prediction', img_grid_output, global_step)
 
-
                 print('Epoch: {} \tBatch: {} \tLoss: {:.6f}'.format(epoch, batch_idx, loss.item()))
                 # save model weights
-                if batch_idx % 100 != 0:
+                if batch_idx % 40 != 0:
                     continue
                 print('Saving model weights')
                 Path(f'./model_weights/{flags.timestamp}').mkdir(parents=True, exist_ok=True)
                 torch.save({'state_dict': model.state_dict(), 'optimizer': optimizer.state_dict(),
                             'scheduler': scheduler.state_dict()},
-                           f'./model_weights/{flags.timestamp}/conv_autoencoder_epoch_{epoch}_step_{global_step}_{flags.timestamp}.pt')
-        scheduler.step()  # step to the next learning rate each epoch
+                           f'./model_weights/{flags.timestamp}/conv_autoencoder{flags.timestamp}_epoch_{epoch}_step_{global_step}_.pt')
         train_loss = train_loss / len(train_loader)
         print('Epoch: {} \tTraining Loss: {:.6f}'.format(epoch, train_loss))
     writer.close()
