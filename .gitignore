@@ -4,3 +4,6 @@
 *.xml
 /.idea
 *.pt
+*.csv
+*.png
+*.mp4

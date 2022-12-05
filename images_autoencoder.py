@@ -1,6 +1,3 @@
-from glob import glob
-from pathlib import Path
-
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
@@ -10,7 +7,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
 from PIL import Image
+from glob import glob
 from natsort import natsorted
+from pathlib import Path
 from personal_utils.flags import flags
 from personal_utils.plot_utils import scatter_clustering_with_gt_labels_in_2d, scatter_clustering_with_gt_labels_in_3d
 from sklearn.cluster import KMeans
@@ -66,7 +65,6 @@ class AutoEncoder(nn.Module):
 
     def forward(self, x):
         embedding = self.encoder(x)
-
         x = self.decoder(embedding)
         x = Resize(224)(x)
         return x
@@ -98,8 +96,6 @@ class ConvAutoencoder(nn.Module):
         x = self.pool(x)
 
         x = self.conv3(x)
-        # x = self.pool(x)
-        # x = F.relu(self.conv4(x))
         x = self.pool(x)
         x = self.conv4(x)
         x = self.pool(x)
@@ -129,99 +125,11 @@ def transform(img):
     return img
 
 
-def get_contrast(img=None, img_path=None):
-    # read image
-    if img_path:
-        img = cv2.imread(img_path)
-    else:
-        img = np.array(transforms.ToPILImage()(img))
-    # convert to LAB color space
-    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-
-    # separate channels
-    L, A, B = cv2.split(lab)
-
-    # compute minimum and maximum in 5x5 region using erode and dilate
-    kernel = np.ones((5, 5), np.uint8)
-    min = cv2.erode(L, kernel, iterations=1)  # setting the minimal value in the vicinity
-    max = cv2.dilate(L, kernel, iterations=1)
-
-    # convert min and max to floats
-    min = min.astype(np.float64)
-    max = max.astype(np.float64)
-
-    # compute local contrast
-    contrast = (max - min) / (max + min)
-
-    # get average across whole image
-    average_contrast = 100 * np.mean(contrast)
-
-    print(str(average_contrast) + "%")
-    return [average_contrast]
-
-
-def get_mean_var_rgb(img=None, img_path=None):
-    if img_path:
-        pil_img = Image.open(img_path).convert('RGB')
-
-    else:
-        pil_img = transforms.ToPILImage()(img).convert('RGB')
-    img_arr = np.array(pil_img)
-    output = 6 * [None]
-    for channel_idx in range(img_arr.shape[2]):
-        curr_arr = img_arr[..., channel_idx]
-        output[2 * channel_idx] = np.sum(curr_arr) / curr_arr.size
-        output[2 * channel_idx + 1] = np.std(curr_arr) / (curr_arr.size / 1000000)
-    return output
-
-
 def get_global_features(img=None, img_path=None):
     feat = get_contrast(img)
     rgb_feat = get_mean_var_rgb(img)
     feat.extend(rgb_feat)
     return feat
-
-
-def rgb_to_lab(srgb):
-    srgb_pixels = torch.reshape(srgb, [-1, 3])
-
-    linear_mask = (srgb_pixels <= 0.04045).type(torch.FloatTensor).to(device)
-    exponential_mask = (srgb_pixels > 0.04045).type(torch.FloatTensor).to(device)
-    rgb_pixels = (srgb_pixels / 12.92 * linear_mask) + (((srgb_pixels + 0.055) / 1.055) ** 2.4) * exponential_mask
-
-    rgb_to_xyz = torch.tensor([
-        #    X        Y          Z
-        [0.412453, 0.212671, 0.019334],  # R
-        [0.357580, 0.715160, 0.119193],  # G
-        [0.180423, 0.072169, 0.950227],  # B
-    ]).type(torch.FloatTensor).to(device)
-
-    xyz_pixels = torch.mm(rgb_pixels, rgb_to_xyz)
-
-    # XYZ to Lab
-    xyz_normalized_pixels = torch.mul(xyz_pixels,
-                                      torch.tensor([1 / 0.950456, 1.0, 1 / 1.088754]).type(torch.FloatTensor).to(
-                                          device))
-
-    epsilon = 6.0 / 29.0
-
-    linear_mask = (xyz_normalized_pixels <= (epsilon ** 3)).type(torch.FloatTensor).to(device)
-
-    exponential_mask = (xyz_normalized_pixels > (epsilon ** 3)).type(torch.FloatTensor).to(device)
-
-    fxfyfz_pixels = (xyz_normalized_pixels / (3 * epsilon ** 2) + 4.0 / 29.0) * linear_mask + (
-            (xyz_normalized_pixels + 0.000001) ** (1.0 / 3.0)) * exponential_mask
-    # convert to lab
-    fxfyfz_to_lab = torch.tensor([
-        #  l       a       b
-        [0.0, 500.0, 0.0],  # fx
-        [116.0, -500.0, 200.0],  # fy
-        [0.0, 0.0, -200.0],  # fz
-    ]).type(torch.FloatTensor).to(device)
-    lab_pixels = torch.mm(fxfyfz_pixels, fxfyfz_to_lab) + torch.tensor([-16.0, 0.0, 0.0]).type(torch.FloatTensor).to(
-        device)
-    # return tf.reshape(lab_pixels, tf.shape(srgb))
-    return torch.reshape(lab_pixels, srgb.shape)
 
 
 def create_image_features_df():
@@ -242,61 +150,6 @@ class CustomDataset(ImageFolder):
         if self.transform:
             image = self.transform(image)
         return image, img_path  # , feat
-
-
-def lab_to_rgb(lab):
-    lab_pixels = torch.reshape(lab, [-1, 3])
-    # convert to fxfyfz
-    lab_to_fxfyfz = torch.tensor([
-        #   fx      fy        fz
-        [1 / 116.0, 1 / 116.0, 1 / 116.0],  # l
-        [1 / 500.0, 0.0, 0.0],  # a
-        [0.0, 0.0, -1 / 200.0],  # b
-    ]).type(torch.FloatTensor).to(device)
-    fxfyfz_pixels = torch.mm(lab_pixels + torch.tensor([16.0, 0.0, 0.0]).type(torch.FloatTensor).to(device),
-                             lab_to_fxfyfz)
-
-    # convert to xyz
-    epsilon = 6.0 / 29.0
-    linear_mask = (fxfyfz_pixels <= epsilon).type(torch.FloatTensor).to(device)
-    exponential_mask = (fxfyfz_pixels > epsilon).type(torch.FloatTensor).to(device)
-
-    xyz_pixels = (3 * epsilon ** 2 * (fxfyfz_pixels - 4 / 29.0)) * linear_mask + (
-            (fxfyfz_pixels + 0.000001) ** 3) * exponential_mask
-
-    # denormalize for D65 white point
-    xyz_pixels = torch.mul(xyz_pixels, torch.tensor([0.950456, 1.0, 1.088754]).type(torch.FloatTensor).to(device))
-
-    xyz_to_rgb = torch.tensor([
-        #     r           g          b
-        [3.2404542, -0.9692660, 0.0556434],  # x
-        [-1.5371385, 1.8760108, -0.2040259],  # y
-        [-0.4985314, 0.0415560, 1.0572252],  # z
-    ]).type(torch.FloatTensor).to(device)
-
-    rgb_pixels = torch.mm(xyz_pixels, xyz_to_rgb)
-    # avoid a slightly negative number messing up the conversion
-    # clip
-    rgb_pixels[rgb_pixels > 1] = 1
-    rgb_pixels[rgb_pixels < 0] = 0
-
-    linear_mask = (rgb_pixels <= 0.0031308).type(torch.FloatTensor).to(device)
-    exponential_mask = (rgb_pixels > 0.0031308).type(torch.FloatTensor).to(device)
-    srgb_pixels = (rgb_pixels * 12.92 * linear_mask) + (
-            ((rgb_pixels + 0.000001) ** (1 / 2.4) * 1.055) - 0.055) * exponential_mask
-
-    return torch.reshape(srgb_pixels, lab.shape)
-
-
-def batch_get_contrast(images):
-    lab_imgs = (rgb_to_lab(images)[:, 0, :, :])
-    max_img = F.max_pool2d(lab_imgs, 3, stride=1, padding=1)
-    min_img = -F.max_pool2d(-lab_imgs, 3, stride=1, padding=1)
-    contrast = (max_img - min_img) / (max_img + min_img)
-    contrast[(contrast < -100) + (contrast > 100)] = torch.mean(contrast[(contrast > -100) * (contrast < 100)])
-    # get average across whole image
-    average_contrast = torch.mean(contrast, dim=(1, 2))
-    return average_contrast
 
 
 def batch_get_mean_rgb(images):

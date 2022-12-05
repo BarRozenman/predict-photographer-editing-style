@@ -10,8 +10,7 @@ import torch.nn as nn
 from natsort import natsorted
 from personal_utils.file_utils import append2file_name
 from personal_utils.flags import flags
-from personal_utils.plot_utils import scatter_multiple_images, \
-    scatter_clustering_with_gt_labels_in_3d
+from personal_utils.plot_utils import scatter_multiple_images, scatter_clustering_with_gt_labels_in_3d
 from sklearn.decomposition import PCA
 from torch import Tensor
 from torch.utils.data import DataLoader
@@ -71,7 +70,6 @@ class MixedNetwork(nn.Module):
             nn.ReLU(inplace=True))
 
         self.combined_features = nn.Sequential(
-            # change this input nodes
             nn.Linear(13, 8),
             nn.ReLU(),
             nn.Linear(8, 8),
@@ -104,9 +102,7 @@ def plot_user_temporal_embedding(users_embed_temporal, loss_for_plot, sink_path)
     for i in range(users_embed_temporal.shape[0]):
         curr_users_embed = users_embed_temporal[i, ...].cpu().detach().numpy()
         dim_2_users = pd.DataFrame(dim_reduction_func.transform(curr_users_embed), columns=['x', 'y'])
-
         ax = sns.scatterplot(data=dim_2_users, x='x', y='y', hue=dim_2_users.index.values, palette="deep")
-        # remove legend
         ax.get_legend().remove()
         ax.set_xlim(-1.2, 1.2)
         ax.set_ylim(-1.2, 1.2)
@@ -160,10 +156,10 @@ def use_model_to_predict(model, dataset):
 
 
 if __name__ == '__main__':
-    images_editing_features = pd.read_csv('/home/bar/projects/personal/imagen/images_editing_features.csv')
-    images_embeddings_files = glob('/home/bar/projects/personal/imagen/embeddings/embedding_epoch*.csv')
+    images_editing_features = pd.read_csv('//images_editing_features.csv')
+    images_embeddings_files = glob('//embeddings/embedding_epoch*.csv')
     images_embeddings = pd.read_csv(
-        '/home/bar/projects/personal/imagen/embeddings/embedding_epoch_10_2022-12-03_1851.csv')
+        '//embeddings/embedding_epoch_10_2022-12-03_1851.csv')
     df = images_editing_features[['path', 'photographer']]
     df = df.set_index('path')
     sr = df['photographer']
