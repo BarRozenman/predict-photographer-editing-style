@@ -1,52 +1,37 @@
-'''# this script will take noise and an original image and train a neuron network
+"""# this script will take noise and an original image and train a neuron network
  to transform the noise image to the original one via gradient descent
-'''
+"""
 from __future__ import print_function
-
-from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.optim as optim
 from PIL import Image
+from pathlib import Path
 from personal_utils.flags import flags
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
 from torchvision.models import VGG
 from torchvision.models import vgg
 from tqdm import tqdm
-''
-writer = SummaryWriter('res')
 
 
 def preprocess_image(filename: str):
     input_image = Image.open(filename)
-    preprocess = transforms.Compose([
-        transforms.Resize([224, 224]),
-        # transforms.CenterCrop(224),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        transforms.Lambda(lambda x: x.mul(255)),
-
-    ])
-    proc_img = (preprocess(input_image))
+    preprocess = transforms.Compose(
+        [
+            transforms.Resize([224, 224]),
+            # transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            transforms.Lambda(lambda x: x.mul(255)),
+        ]
+    )
+    proc_img = preprocess(input_image)
     # plt.imshow(transforms.ToPILImage()(unnormalize(proc_img/255)))
     # plt.show()
     return proc_img
-
-
-def unnormalize(img):
-    mean = (0.485, 0.456, 0.406)
-    std = (0.229, 0.224, 0.225)
-    for t, m, s in zip(img, mean, std):
-        t.mul_(s).add_(m)
-    # inv_normalize = transforms.Normalize(
-    # mean=[-0.485/0.229, -0.456/0.224, -0.406/0.225],
-    # std=[1/0.229, 1/0.224, 1/0.255]
-    # )
-    #     img = inv_normalize(img)
-    return img
 
 
 def tv_loss(img, tv_weight):
@@ -64,14 +49,6 @@ def tv_loss(img, tv_weight):
     h_variance = torch.sum(torch.pow(img[:, :-1, :] - img[:, 1:, :], 2))
     loss = tv_weight * (h_variance + w_variance)
     return loss
-
-
-def setup_initial_image(content_image=None, init='content', requires_grad=False):
-    if init == 'content':
-        # b= preprocess_image(content_image).to(device)
-        # a=b.requires_grad_(True)
-        # return a
-        return preprocess_image(content_image)
 
 
 def get_gram_mat(style_layers):
@@ -97,26 +74,23 @@ class Mod(VGG):
         self.content_layers = [1]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x = self.model(x)
         feat = []
+        content = None
         for count, layer in enumerate(self.model):
             x = layer(x)
             if count in self.chosen_features:
                 feat.append(x)
             elif count in self.content_layers:
                 content = x
-
-        if False:
-            plt.imshow(transforms.ToPILImage()(x[13, :, :]))
-            plt.show()
         return feat, content
 
 
-if __name__ == '__main__':
-    wedding_content = 'data/wedding_content.jpg'
-    wedding_style = 'data/wedding_style.jpg'
+if __name__ == "__main__":
+    writer = SummaryWriter("res")
+    wedding_content = "data/wedding_content.jpg"
+    wedding_style = "data/wedding_style.jpg"
 
-    device = 'cuda'
+    device = "cuda"
     content_image = preprocess_image(wedding_content).to(device)
     IMAGENET_MEAN_255 = [123.675, 116.28, 103.53]
     IMAGENET_STD_NEUTRAL = [1, 1, 1]
@@ -132,7 +106,7 @@ if __name__ == '__main__':
 
     if False:
         if True:
-            initial_image = initial_image.clone().to('cuda')
+            initial_image = initial_image.clone().to("cuda")
             initial_image.add_(torch.rand((3, 224, 224), device="cuda") * 255)
             initial_image.requires_grad_(True).cuda()
         else:
@@ -144,7 +118,7 @@ if __name__ == '__main__':
     # loss_func = MSELoss()
     # for c,(i,j) in enumerate(itertools.product(range(3),range(3))):
     #     axs[i,j].imshow(y[c,:,:])
-    im_name = 'temp_img_.pt'
+    im_name = "temp_img_.pt"
 
     if Path(im_name).exists() and False:
         initial_image = torch.load(im_name)
@@ -162,7 +136,7 @@ if __name__ == '__main__':
     alpha = 1
     beta = 0.01
     running_loss = []
-    device = 'cuda'
+    device = "cuda"
     target_style, _ = model(initial_image)
     _, target_content = model(content_image)
 
@@ -185,11 +159,17 @@ if __name__ == '__main__':
             # loss_1 = torch.mean((orig_feat - noise_feat) ** 2)
             # gram matrix:
             loss_1 = 0
-            gram_1 = (
-                torch.matmul(orig_feat.view(n_channels, hight * width), orig_feat.view(n_channels, hight * width).T))
-            gram_2 = (
-                torch.matmul(noise_feat.view(n_channels, hight * width), noise_feat.view(n_channels, hight * width).T))
-            loss_2 = torch.mean((gram_1 - gram_2) ** 2) / (gram_1.shape[0] * gram_1.shape[1])
+            gram_1 = torch.matmul(
+                orig_feat.view(n_channels, hight * width),
+                orig_feat.view(n_channels, hight * width).T,
+            )
+            gram_2 = torch.matmul(
+                noise_feat.view(n_channels, hight * width),
+                noise_feat.view(n_channels, hight * width).T,
+            )
+            loss_2 = torch.mean((gram_1 - gram_2) ** 2) / (
+                gram_1.shape[0] * gram_1.shape[1]
+            )
             # loss_3 = 1/tv_loss(noise_image,0.001)
             loss_3 = 0
             loss += alpha * loss_1 + beta * loss_2 + loss_3
@@ -205,13 +185,13 @@ if __name__ == '__main__':
 
         opt.step()
         if i % 50 == 0:
-            writer.add_scalar('Loss', loss, i)
+            writer.add_scalar("Loss", loss, i)
             print(loss)
             im: Image.Image = transforms.ToPILImage()(initial_image)
-            im.save(f'res/images/image_{i}.jpg')
+            im.save(f"res/images/image_{i}.jpg")
             # res= seaborn.histplot(np.array(im)[:,:,0])
-            writer.add_image('img', initial_image)
-            writer.add_histogram('asd', np.array(im)[:, :, 0], i)
+            writer.add_image("img", initial_image)
+            writer.add_histogram("asd", np.array(im)[:, :, 0], i)
 
     torch.save(initial_image, im_name)
 
