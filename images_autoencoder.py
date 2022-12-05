@@ -106,10 +106,7 @@ class ConvAutoencoder(nn.Module):
         x = nn.Flatten()(x)
         embedding = self.lin(x)
         x = embedding.view(embedding.shape[0], 1, 4, 4)
-        # get x layer from convnet and return it
-        # emb = F.avg_pool2d(x, kernel_size=56, stride=1, padding=0)
         x = F.relu(x)
-        # x = self.pool(x)
         x = F.relu(self.t_conv1(x))
         x = F.relu(self.t_conv2(x))
         x = F.relu(self.t_conv3(x))
@@ -120,7 +117,6 @@ class ConvAutoencoder(nn.Module):
         x = Resize(224)(x)
         if flags.debug:
             T.ToPILImage()(x[0, ...]).show()
-
         return x, embedding
 
 
@@ -128,8 +124,6 @@ def transform(img):
     t = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
-        # transforms.Normalize(mean=[0.485, 0.456, 0.406],
-        #                      std=[0.229, 0.224, 0.225])
     ])
     img = t(img)
     return img
@@ -163,8 +157,6 @@ def get_contrast(img=None, img_path=None):
     average_contrast = 100 * np.mean(contrast)
 
     print(str(average_contrast) + "%")
-    if average_contrast == torch.nan:
-        a = 1
     return [average_contrast]
 
 
@@ -174,7 +166,6 @@ def get_mean_var_rgb(img=None, img_path=None):
 
     else:
         pil_img = transforms.ToPILImage()(img).convert('RGB')
-
     img_arr = np.array(pil_img)
     output = 6 * [None]
     for channel_idx in range(img_arr.shape[2]):
@@ -190,8 +181,6 @@ def get_global_features(img=None, img_path=None):
     feat.extend(rgb_feat)
     return feat
 
-
-# create custom pytorch dataset
 
 def rgb_to_lab(srgb):
     srgb_pixels = torch.reshape(srgb, [-1, 3])
@@ -252,13 +241,6 @@ class CustomDataset(ImageFolder):
         image = Image.open(img_path).convert('RGB')
         if self.transform:
             image = self.transform(image)
-        # T.ToPILImage()(image).show()
-        # feat = get_contrast(image)
-        # if np.isnan(feat[0]):
-        #     a=1
-        # feat = get_contrast(image)
-        # rgb_feat = get_mean_var_rgb(image)
-        # feat.extend(rgb_feat)
         return image, img_path  # , feat
 
 
@@ -418,7 +400,6 @@ if __name__ == '__main__':
             writer.add_scalar('loss', loss, global_step)
             train_loss += loss.item() * images.size(0)
             if save_embedding:
-                # print learning rate
                 print(scheduler.get_last_lr())
                 writer.add_scalar('learning rate', scheduler.get_last_lr()[0], global_step)
 
@@ -454,104 +435,3 @@ if __name__ == '__main__':
         train_loss = train_loss / len(train_loader)
         print('Epoch: {} \tTraining Loss: {:.6f}'.format(epoch, train_loss))
     writer.close()
-
-    # arg_class = collections.namedtuple('arg',
-    #                                    ['data_dir'])
-    # data_dir = '/home/bar/projects/personal/imagen/data/images'
-    # args = arg_class(data_dir)
-    # args.data_dir
-    # df = pd.DataFrame(columns=['image_path', 'contrast', 'mean_r', 'var_r', 'mean_g', 'var_g', 'mean_b', 'var_b'])
-    # for image in glob(os.path.join(args.data_dir, "*.jpg"))[:100]:
-    #     try:
-    #         feat = get_contrast(image)
-    #     except:  # skip back images
-    #         continue
-    #     rgb_feat = get_mean_var_rgb(image)
-    #     feat.extend(rgb_feat)
-    #     feat.insert(0, image)
-    #     df.loc[len(df)] = feat
-    # df.dropna(inplace=True)
-    #
-    # img_path = '/home/bar/projects/personal/imagen/data/wedding_content.jpg'
-    # contrast = get_contrast(img_path)
-    # pil_img = Image.open(img_path)
-    # get_mean_var_rgb(img_path)
-    # exifdata = pil_img.getexif()
-    # photographer
-
-    # that the loss is the 5 values autoencoder of the input vs output
-
-    EMBED_DIMENSION = 5
-    EMBED_MAX_NORM = 1
-
-    # class CBOW_Model(nn.Module):
-    #     def __init__(self, vocab_size: int):
-    #         super(CBOW_Model, self).__init__()
-    #         self.embeddings = nn.Embedding(
-    #             num_embeddings=vocab_size,
-    #             embedding_dim=EMBED_DIMENSION,
-    #             max_norm=EMBED_MAX_NORM,
-    #         )
-    #         self.linear = nn.Linear(
-    #             in_features=EMBED_DIMENSION,
-    #             out_features=vocab_size,
-    #         )
-    #
-    #     def forward(self, inputs_):
-    #         x = self.embeddings(inputs_)
-    #         x = x.mean(axis=1)
-    #         x = self.linear(x)
-    #         return x
-    #
-    #
-    # # from torchtext.vocab import build_vocab_from_iterator
-    #
-    # MIN_WORD_FREQUENCY = 50
-    #
-    #
-    # def build_vocab(data_iter, tokenizer):
-    #     vocab = build_vocab_from_iterator(
-    #         map(tokenizer, data_iter),
-    #         specials=["<unk>"],
-    #         min_freq=MIN_WORD_FREQUENCY,
-    #     )
-    #     vocab.set_default_index(vocab["<unk>"])
-    #     return vocab
-    #
-    #
-    # CBOW_N_WORDS = 4
-    # MAX_SEQUENCE_LENGTH = 256
-    #
-    #
-    # def collate_cbow(batch, text_pipeline):
-    #     batch_input, batch_output = [], []
-    #     for text in batch:
-    #         text_tokens_ids = text_pipeline(text)
-    #         if len(text_tokens_ids) < CBOW_N_WORDS * 2 + 1:
-    #             continue
-    #         if MAX_SEQUENCE_LENGTH:
-    #             text_tokens_ids = text_tokens_ids[:MAX_SEQUENCE_LENGTH]
-    #         for idx in range(len(text_tokens_ids) - CBOW_N_WORDS * 2):
-    #             token_id_sequence = text_tokens_ids[idx: (idx + CBOW_N_WORDS * 2 + 1)]
-    #             output = token_id_sequence.pop(CBOW_N_WORDS)
-    #             input_ = token_id_sequence
-    #             batch_input.append(input_)
-    #             batch_output.append(output)
-    #
-    #     batch_input = torch.tensor(batch_input, dtype=torch.long)
-    #     batch_output = torch.tensor(batch_output, dtype=torch.long)
-    #     return batch_input, batch_output
-    #
-    #
-    # from torch.utils.data import DataLoader
-    # from functools import partial
-    #
-    # dataloader = DataLoader(
-    #     data_iter,
-    #     batch_size=batch_size,
-    #     shuffle=True,
-    #     collate_fn=partial(collate_cbow, text_pipeline=text_pipeline),
-    # )
-    #
-    # embeddings = list(model.parameters())[0]
-    # vocab.get_itos()

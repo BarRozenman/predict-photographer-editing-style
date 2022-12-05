@@ -23,7 +23,7 @@ from tqdm import tqdm
 
 def create_user_initial_vector(num_users):
     # Create a vector of random with size 3 by num_photographers to represent the photographer
-    return torch.rand(num_users, 3, generator=torch.Generator().manual_seed(42))  # .requires_grad_(True)
+    return torch.rand(num_users, 3, generator=torch.Generator().manual_seed(42))
 
 
 class CustomDataset(Dataset):
@@ -56,9 +56,6 @@ class MixedNetwork(nn.Module):
         super(MixedNetwork, self).__init__()
         self.train = train
         self.norm_params = norm_params
-        # image_modules = list(models.resnet50().children())[:-1]
-        # self.image_features = nn.Sequential(*image_modules)
-        # self.user_features = user_feaktures
         self.img_features = nn.Sequential(
             nn.Linear(in_features=16, out_features=28, bias=False),
             nn.ReLU(inplace=True),
@@ -72,7 +69,6 @@ class MixedNetwork(nn.Module):
             nn.Dropout(p=0.25),
             nn.Linear(in_features=3, out_features=3, bias=False),
             nn.ReLU(inplace=True))
-        # nn.Dropout(p=0.25))
 
         self.combined_features = nn.Sequential(
             # change this input nodes
@@ -81,7 +77,6 @@ class MixedNetwork(nn.Module):
             nn.Linear(8, 8),
             nn.ReLU(),
             nn.Linear(8, 4))
-        # nn.ReLU())
 
     def norm_test_input(self, img_features, user_features):
 
@@ -90,7 +85,6 @@ class MixedNetwork(nn.Module):
         return img_features, user_features
 
     def forward(self, img_features, user_features):
-        # user_features = user_features.requires_grad_(True)
         if self.train:
             pass
         else:
@@ -100,14 +94,12 @@ class MixedNetwork(nn.Module):
         x = torch.cat((a.view(a.size(0), -1), b.view(b.size(0), -1)), dim=1)
         x = self.combined_features(x)
         x = torch.tanh(x)
-
         return x
 
 
 def plot_user_temporal_embedding(users_embed_temporal, loss_for_plot, sink_path):
     # Plot the temporal embedding of the users
     last_users_embed_temporal = pd.DataFrame(users_embed_temporal[-1, :, :], columns=['x', 'y', 'z'])
-
     dim_reduction_func = PCA(n_components=2).fit(last_users_embed_temporal)
     for i in range(users_embed_temporal.shape[0]):
         curr_users_embed = users_embed_temporal[i, ...].cpu().detach().numpy()
@@ -116,7 +108,6 @@ def plot_user_temporal_embedding(users_embed_temporal, loss_for_plot, sink_path)
         ax = sns.scatterplot(data=dim_2_users, x='x', y='y', hue=dim_2_users.index.values, palette="deep")
         # remove legend
         ax.get_legend().remove()
-        # limit x and y axis to -1 to 1
         ax.set_xlim(-1.2, 1.2)
         ax.set_ylim(-1.2, 1.2)
         plt.title(f'Users embedding at step {str(i).zfill(4)}\n Loss: {round(loss_for_plot[i], 5):8.3f}')
@@ -139,8 +130,6 @@ def load_model(model_path=None):
     dir = f'model_weights/user_predictor'
     last_file = natsorted(glob(f'{dir}/**/*.pt'))[-1]
     model = torch.load(last_file)
-
-    # model.to(device)
     return model
 
 
@@ -156,8 +145,6 @@ def use_model_to_predict(model, dataset):
     with torch.no_grad():
         for i, data in enumerate(dataset):
             img_features = data['image_embed']
-            # img_features = img_features.to(device)
-            # user_features = user_features.to(device)
             output = model(img_features, user_embed_batch)
             output2 = model(img_features, user_embed_batch_2)
             if output_all is None:
@@ -166,7 +153,6 @@ def use_model_to_predict(model, dataset):
                 output_all = torch.cat((output_all, output.unsqueeze(0)), dim=0)
             if i == 10:
                 break
-    a = 1
     if flags.debug:
         sns.histplot(output[:, 0])
         sns.histplot(output2[:, 1])
@@ -176,15 +162,12 @@ def use_model_to_predict(model, dataset):
 if __name__ == '__main__':
     images_editing_features = pd.read_csv('/home/bar/projects/personal/imagen/images_editing_features.csv')
     images_embeddings_files = glob('/home/bar/projects/personal/imagen/embeddings/embedding_epoch*.csv')
-    # images_embeddings = pd.read_csv(natsorted(images_embeddings_files)[-1])
     images_embeddings = pd.read_csv(
         '/home/bar/projects/personal/imagen/embeddings/embedding_epoch_10_2022-12-03_1851.csv')
-    # images_embeddings.join(images_editing_features, on='image_path')
     df = images_editing_features[['path', 'photographer']]
     df = df.set_index('path')
     sr = df['photographer']
     images_embeddings = images_embeddings.join(sr, on='image_path', how='left')
-    # images_embeddings = images_embeddings.join(sr, on='image_path', how='left')
     images_embeddings.dropna(inplace=True)
     images_embeddings['photographer'] = images_embeddings['photographer'].astype('int')
 
@@ -232,7 +215,6 @@ if __name__ == '__main__':
     train_set, val_set = random_split(dataset, [train_sample_num, test_sample_num])
     train_loader = DataLoader(train_set, batch_size=batch_size, num_workers=num_workers)
     test_loader = DataLoader(val_set, batch_size=batch_size, num_workers=num_workers)
-    # use_model_to_predict(load_model(), test_loader)
     lr = 0.001
     writer = SummaryWriter(f'runs/user_embedding/{flags.timestamp}')
     opt_state = None
@@ -268,8 +250,6 @@ if __name__ == '__main__':
             user_embed = users_embed[user_embed_idx]
             user_embed = torch.tensor(user_embed, requires_grad=True, device=device)
             optimizer = torch.optim.Adam(list(model.parameters()) + [user_embed], lr=lr)
-            if opt_state is not None:
-                pass
             pred = model(image_embed, user_embed)
             loss = loss_func(pred, label)
             optimizer.zero_grad()
@@ -301,15 +281,9 @@ if __name__ == '__main__':
 
                 users_embed_temporal = torch.cat((users_embed_temporal, users_embed.unsqueeze(0)), dim=0)
                 # save last user embedding
-                # save model
                 dir = f'model_weights/user_predictor/{flags.timestamp}'
                 Path(dir).mkdir(parents=True, exist_ok=True)
                 torch.save(model, f'{dir}/edit_predictor_{flags.timestamp}_{epoch}_{global_step}.pt')
-                # save user temporal embedding
-                # torch.save(users_embed_temporal.cpu(), f'users_embedding/user_embed_temporal_{flags.timestamp}.pt')
-                # plot user temporal embedding tensor as heatmap
-
-            # print learning rate
         scheduler.step()
         print('Epoch: {} \tTraining Loss: {:.6f}'.format(epoch, loss.item()))
     torch.save(users_embed_temporal[-1, ...], f'user_embedding/users_embed_temporal_{flags.timestamp}.pt')
