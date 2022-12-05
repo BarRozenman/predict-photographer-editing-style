@@ -1,37 +1,28 @@
-import collections
-import os
-from collections import namedtuple
 from glob import glob
 from pathlib import Path
 
-import hdbscan
-import matplotlib.pyplot as plt
-import pandas as pd
-import torch.nn as nn
 import cv2
+import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import torchvision
 from PIL import Image
-import torch
 from natsort import natsorted
 from personal_utils.flags import flags
 from personal_utils.plot_utils import scatter_clustering_with_gt_labels_in_2d, scatter_clustering_with_gt_labels_in_3d
 from sklearn.cluster import KMeans
-from torch import max_pool2d, conv_transpose2d
 from torch.utils.data import DataLoader
 from torch.utils.data.dataset import random_split
-from torchvision.datasets import ImageFolder, DatasetFolder, VisionDataset
-from torchvision.models import vgg
-from torchvision.transforms import transforms as T, Resize
-from torchvision.transforms import transforms
-import seaborn as sns
-# Loss function
-import torch.nn.functional as F
-from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
+from torchvision.datasets import ImageFolder
+from torchvision.transforms import transforms
+from torchvision.transforms import transforms as T, Resize
+from tqdm import tqdm
 
 
-# Define the Convolutional Autoencoder
 class Reshape(nn.Module):
     def __init__(self, *args):
         super().__init__()
@@ -39,14 +30,6 @@ class Reshape(nn.Module):
 
     def forward(self, x):
         return x.view(self.shape)
-
-
-class Trim(nn.Module):
-    def __init__(self, *args):
-        super().__init__()
-
-    def forward(self, x):
-        return x[:, :, :28, :28]
 
 
 class AutoEncoder(nn.Module):
@@ -95,21 +78,17 @@ class ConvAutoencoder(nn.Module):
 
         # Encoder
         self.pool = nn.MaxPool2d(2, 2)
-
         self.conv1 = nn.Conv2d(3, 16, 3, padding=1)
         # pooling layer
         self.conv2 = nn.Conv2d(16, 8, 3, padding=1)
         self.conv3 = nn.Conv2d(8, 6, 3, padding=1)
         self.conv4 = nn.Conv2d(6, 8, 3, padding=1)
-        # self.conv4 = nn.Conv2d(20, 4, 3, padding=1)
-        # pooling layer
-
         self.lin = nn.Linear(1568, 16)
 
         # Decoder
         self.t_conv1 = nn.ConvTranspose2d(1, 12, 4, stride=4)
         self.t_conv2 = nn.ConvTranspose2d(12, 6, 4, stride=4)
-        self.t_conv3 = nn.ConvTranspose2d(6, 6, 4, stride=2)  # dsfdsfdfs
+        self.t_conv3 = nn.ConvTranspose2d(6, 6, 4, stride=2)
         self.t_conv4 = nn.ConvTranspose2d(6, 3, 4, stride=2)
 
     def forward(self, x):
@@ -374,7 +353,7 @@ if __name__ == '__main__':
     test_loader = DataLoader(val_set, batch_size=batch_size, num_workers=num_workers)
     loss_func = nn.MSELoss()
     global_step = 0
-    lambda1 = lambda epoch: 0.999 ** np.ceil(epoch//4)
+    lambda1 = lambda epoch: 0.999 ** np.ceil(epoch // 4)
     files = glob('model_weights/**/conv_autoencoder_*.pt')
 
     epoch_num_from_file = 0

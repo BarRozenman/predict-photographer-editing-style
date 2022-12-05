@@ -1,40 +1,24 @@
-import collections
-import os
-import sys
-from collections import namedtuple
 from glob import glob
 from pathlib import Path
-from itertools import chain
 
-import hdbscan
 import matplotlib.pyplot as plt
-import pandas as pd
-import torch.nn as nn
-import cv2
 import numpy as np
-from PIL import Image
+import pandas as pd
+import seaborn as sns
 import torch
+import torch.nn as nn
 from natsort import natsorted
 from personal_utils.file_utils import append2file_name
 from personal_utils.flags import flags
-from personal_utils.plot_utils import scatter_clustering_with_gt_labels_in_2d, scatter_multiple_images, \
+from personal_utils.plot_utils import scatter_multiple_images, \
     scatter_clustering_with_gt_labels_in_3d
-from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
-from torch import max_pool2d, conv_transpose2d, Tensor
-from torch.autograd import Variable
-from torch.optim import Adam
+from torch import Tensor
 from torch.utils.data import DataLoader
 from torch.utils.data.dataset import random_split, Dataset
-from torchvision.datasets import ImageFolder, DatasetFolder, VisionDataset
-from torchvision.models import vgg
-from torchvision.transforms import transforms as T, Resize
-from torchvision.transforms import transforms
-import seaborn as sns
-# Loss function
-import torch.nn.functional as F
-from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
+# Loss function
+from tqdm import tqdm
 
 
 def create_user_initial_vector(num_users):
@@ -97,7 +81,7 @@ class MixedNetwork(nn.Module):
             nn.Linear(8, 8),
             nn.ReLU(),
             nn.Linear(8, 4))
-            # nn.ReLU())
+        # nn.ReLU())
 
     def norm_test_input(self, img_features, user_features):
 
@@ -115,7 +99,7 @@ class MixedNetwork(nn.Module):
         b = self.user_features(user_features.float())
         x = torch.cat((a.view(a.size(0), -1), b.view(b.size(0), -1)), dim=1)
         x = self.combined_features(x)
-        x = torch.sigmoid(x)
+        x = torch.tanh(x)
 
         return x
 
@@ -162,10 +146,10 @@ def load_model(model_path=None):
 
 def use_model_to_predict(model, dataset):
     user_features_file = natsorted(glob('user_embedding/users_embed_temporal_*.pt'))[-1]
-    user_embed:Tensor = torch.load(user_features_file)
+    user_embed: Tensor = torch.load(user_features_file)
     model.train = False
     user_embed.repeat(batch_size, 1)
-    users_id =np.random.choice(range(30),2, replace=False)
+    users_id = np.random.choice(range(30), 2, replace=False)
     user_embed_batch = user_embed[users_id[0], ...].repeat(batch_size, 1)
     user_embed_batch_2 = user_embed[users_id[1], ...].repeat(batch_size, 1)
     output_all = None
@@ -179,13 +163,13 @@ def use_model_to_predict(model, dataset):
             if output_all is None:
                 output_all = output.unsqueeze(0)
             else:
-                output_all = torch.cat((output_all,output.unsqueeze(0)), dim=0)
+                output_all = torch.cat((output_all, output.unsqueeze(0)), dim=0)
             if i == 10:
                 break
-    a=1
+    a = 1
     if flags.debug:
-        sns.histplot(output[:,0])
-        sns.histplot(output2[:,1])
+        sns.histplot(output[:, 0])
+        sns.histplot(output2[:, 1])
         plt.show()
 
 
@@ -221,14 +205,15 @@ if __name__ == '__main__':
     v = (v - v.min(0)) / (v.max(0) - v.min(0))
     im_emb.iloc[:, :-1] = v
 
-    # normalize the data
     if flags.debug:
-        scatter_clustering_with_gt_labels_in_2d(images_editing_features.iloc[:, 2:-1])
-        scatter_clustering_with_gt_labels_in_2d(images_embeddings.iloc[:, 1:], title='image embedding space')
-        x = images_editing_features.iloc[:, 1]
-        y = images_editing_features.iloc[:, 2]
-        scatter_multiple_images(x, y, images_editing_features.iloc[:, 0], shown_amount=200, zoom=0.08)
+        xyz = PCA(n_components=3).fit_transform(images_editing_features.iloc[:, :-1])
+        scatter_multiple_images(xyz[:, 0], xyz[:, 1], images_editing_features.index, shown_amount=200, zoom=0.08)
+        plt.xticks([])
+        plt.yticks([])
         plt.show()
+        scatter_clustering_with_gt_labels_in_3d(xyz, title='image embedding space')
+        plt.show()
+
     num_users = len(np.unique(images_editing_features['photographer']))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     users_embed = create_user_initial_vector(num_users).to(device)
@@ -248,7 +233,7 @@ if __name__ == '__main__':
     train_loader = DataLoader(train_set, batch_size=batch_size, num_workers=num_workers)
     test_loader = DataLoader(val_set, batch_size=batch_size, num_workers=num_workers)
     # use_model_to_predict(load_model(), test_loader)
-    lr = 0.005
+    lr = 0.001
     writer = SummaryWriter(f'runs/user_embedding/{flags.timestamp}')
     opt_state = None
     lambda1 = lambda epoch: 0.999 ** np.ceil(epoch // 2)

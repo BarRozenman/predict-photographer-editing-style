@@ -3,45 +3,20 @@
 '''
 from __future__ import print_function
 
-import copy
-
-import matplotlib
-import seaborn
 from pathlib import Path
 
-import itertools
-
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
-import torchvision
-from torch.utils.tensorboard import SummaryWriter
-
 from PIL import Image
-import matplotlib.pyplot as plt
-# from tensorflow import Tensor
-from torch.nn import MSELoss
-from torchvision.models import vgg, VGG
-import torchvision.transforms as transforms
-from tqdm import tqdm
-from torch.nn import MSELoss
-from tqdm import tqdm
-from typing import List, Tuple
-
-import PIL
-import matplotlib.pyplot as plt
-import torch
-from PIL import Image
-from torch.autograd import Variable
-from torchvision.models import vgg
-from torchvision import transforms
-from torch import nn
-from torch.optim import Adam
 from personal_utils.flags import flags
+from torch.utils.tensorboard import SummaryWriter
+from torchvision import transforms
 from torchvision.models import VGG
-
+from torchvision.models import vgg
+from tqdm import tqdm
+''
 writer = SummaryWriter('res')
 
 
@@ -163,7 +138,6 @@ if __name__ == '__main__':
         else:
             initial_image = torch.ones((3, 224, 224), device="cuda") / 10
             initial_image.requires_grad_(True).cuda()
-
 
     # fig, axs = plt.subplots(3,3)
     # fig.suptitle('Vertically stacked subplots')
