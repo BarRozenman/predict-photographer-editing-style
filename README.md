@@ -8,8 +8,9 @@ data set used is [Cats and Dogs Breeds Classification Oxford Dataset
 
 
 [Alt Text](assets/ezgif.com-gif-maker.gif)
-![](https://github.com/BarRozenman/predict-photographer-editing-style/assets/ezgif.com-gif-maker.gif)
-![](assets/ezgif.com-gif-maker.gif)
+
+![user_embed_temporal_2022-12-03_2314](https://user-images.githubusercontent.com/45449223/205977149-3905c131-b797-4f55-a4f9-54ee002c6216.gif)
+
 
 
 ## What this repository do? 🚀
