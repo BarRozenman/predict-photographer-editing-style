@@ -29,8 +29,6 @@ def preprocess_image(filename: str):
         ]
     )
     proc_img = preprocess(input_image)
-    # plt.imshow(transforms.ToPILImage()(unnormalize(proc_img/255)))
-    # plt.show()
     return proc_img
 
 

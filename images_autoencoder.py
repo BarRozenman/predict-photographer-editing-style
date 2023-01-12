@@ -1,7 +1,6 @@
 from glob import glob
 from pathlib import Path
 
-import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -11,13 +10,6 @@ import torch.nn.functional as F
 import torchvision
 from PIL import Image
 from natsort import natsorted
-
-from personal_utils.deep_learning_image_utils import batch_get_contrast
-from personal_utils.flags import flags
-from personal_utils.plot_utils import (
-    scatter_clustering_with_gt_labels_in_2d,
-    scatter_clustering_with_gt_labels_in_3d,
-)
 from sklearn.cluster import KMeans
 from torch.utils.data import DataLoader
 from torch.utils.data.dataset import random_split
@@ -26,6 +18,17 @@ from torchvision.datasets import ImageFolder
 from torchvision.transforms import transforms
 from torchvision.transforms import transforms as T, Resize
 from tqdm import tqdm
+
+from personal_utils.deep_learning_image_utils import (
+    batch_get_contrast,
+    get_mean_var_rgb,
+)
+from personal_utils.flags import flags
+from personal_utils.image_utils import get_contrast
+from personal_utils.plot_utils import (
+    scatter_clustering_with_gt_labels_in_2d,
+    scatter_clustering_with_gt_labels_in_3d,
+)
 
 
 class Reshape(nn.Module):
@@ -76,9 +79,9 @@ class AutoEncoder(nn.Module):
         return x
 
 
-class ConvAutoencoder(nn.Module):
+class ConvAutoEncoder(nn.Module):
     def __init__(self):
-        super(ConvAutoencoder, self).__init__()
+        super(ConvAutoEncoder, self).__init__()
 
         # Encoder
         self.pool = nn.MaxPool2d(2, 2)
@@ -165,7 +168,7 @@ class CustomDataset(ImageFolder):
         image = Image.open(img_path).convert("RGB")
         if self.transform:
             image = self.transform(image)
-        return image, img_path  # , feat
+        return image, img_path
 
 
 def batch_get_mean_rgb(images):
@@ -174,6 +177,8 @@ def batch_get_mean_rgb(images):
 
 
 def split_images_to_photographers():
+    """artificially create a label of photographer for the images (used for dummy data without true photographer
+    label available"""
     df = pd.read_csv("images_editing_features.csv")
     clusterer = KMeans(n_clusters=30, random_state=0).fit(
         df[["contrast", "mean_r", "mean_g", "mean_b"]]
@@ -201,7 +206,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     criterion = nn.L1Loss()
-    dataset = CustomDataset("/home/bar/projects/personal/imagen/data/images", transform)
+    dataset = CustomDataset("data/images", transform)
     train_sample_num = int(len(dataset) * 0.7)
     test_sample_num = len(dataset) - int(len(dataset) * 0.7)
     train_set, val_set = random_split(
@@ -226,7 +231,7 @@ if __name__ == "__main__":
         epoch_num_from_file = int(Path(files[-1]).name.split("_")[3])
         previous_global_step = int(Path(files[-1]).name.split("_")[5])
         previous_epoch_idx = epoch_num_from_file
-        model = ConvAutoencoder().to(device)
+        model = ConvAutoEncoder().to(device)
         loaded_data = torch.load(last_run)
         model.load_state_dict(loaded_data["state_dict"])
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -236,7 +241,7 @@ if __name__ == "__main__":
     else:
         previous_epoch_idx = 0
         previous_global_step = 0
-        model = ConvAutoencoder()
+        model = ConvAutoEncoder()
         model.to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda1)
