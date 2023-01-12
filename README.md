@@ -1,10 +1,10 @@
 # predict-photographer-editing-style
 
 <p align="center"><img src="assets/image_embedding_space.png"/></p>
-](https://www.kaggle.com/datasets/zippyz/cats-and-dogs-breeds-classification-oxford-dataset)
+
 *images embedding space example in 2D projection (using PCA)*
 
-data set used is [Cats and Dogs Breeds Classification Oxford Dataset
+data set used is [Cats and Dogs Breeds Classification Oxford Dataset](https://www.kaggle.com/datasets/zippyz/cats-and-dogs-breeds-classification-oxford-dataset)
 
 [Alt Text](assets/ezgif.com-gif-maker.gif)
 
