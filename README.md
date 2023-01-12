@@ -14,6 +14,7 @@
 
 ### Setup
 - install python 3.8
+- Download and install with pip (or use locally) [this](https://github.com/BarRozenman/personal_utils) package  
 - install CUDA
 - setup conda env and install requirements by running `pip install -r requirements.txt` in your terminal
 - download the dataset from [Cats and Dogs Breeds Classification Oxford Dataset and save it to the "./data" repository
