@@ -13,6 +13,7 @@ from PIL import Image
 from personal_utils.deep_learning_image_utils import (
     compute_total_variation_loss,
     get_gram_mat,
+    unnormalize,
 )
 from personal_utils.flags import flags
 from torch.optim import Adam
@@ -34,9 +35,6 @@ def preprocess_image(filename: str):
         ]
     )
     proc_img = preprocess(input_image)
-    if flags.debug:
-        plt.imshow(transforms.ToPILImage()(unnormalize(proc_img) / 255))
-        plt.show()
     return proc_img
 
 
